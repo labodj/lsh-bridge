@@ -11,8 +11,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TARGET_NAME = "esp"
-TARGET_ROOT_FLAG = "--esp-root"
+TARGET_NAME = "bridge"
+TARGET_ROOT_FLAG = "--bridge-root"
 VENDORED_PROTOCOL_ROOT = (REPO_ROOT / "vendor" / "lsh-protocol").resolve()
 
 
