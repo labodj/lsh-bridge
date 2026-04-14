@@ -179,6 +179,7 @@ public:
     bool started = false;
     HandshakeState handshakeState = HandshakeState::IDLE;
     bool authoritativeStateDirty = false;
+    bool cachedStateRepliesEnabled = false;
     std::uint32_t lastAuthoritativeStateUpdate_ms = 0U;
     etl::vector<LSHNode, constants::vDev::MAX_ACTUATORS> nodes{};
     VirtualDevice virtualDevice{};
@@ -246,6 +247,7 @@ public:
     {
         ardCom.clearPendingActuatorBatch();
         authoritativeStateDirty = false;
+        cachedStateRepliesEnabled = false;
     }
 
     void handleDisconnect()
@@ -341,6 +343,7 @@ public:
     void markAuthoritativeStateDirty()
     {
         authoritativeStateDirty = true;
+        cachedStateRepliesEnabled = false;
         lastAuthoritativeStateUpdate_ms = timeKeeper::getRealTime();
     }
 
@@ -371,6 +374,22 @@ public:
         }
 
         return NodeCom::sendJson(doc, MqttTopicsBuilder::mqttOutStateTopic.c_str(), true, 1);
+    }
+
+    [[nodiscard]] auto tryServeCachedStateRequest() -> bool
+    {
+        // The fast-path is only safe after the bridge has already published a
+        // fresh controller-backed state snapshot in the current MQTT session.
+        // Otherwise Node-RED's paired REQUEST_DETAILS + REQUEST_STATE recovery
+        // cycle can observe state before details and later discard that state
+        // when the fresh details arrive.
+        if (!cachedStateRepliesEnabled || !virtualDevice.isRuntimeSynchronized())
+        {
+            return false;
+        }
+
+        DPL("Serving REQUEST_STATE directly from the synchronized bridge cache.");
+        return publishAuthoritativeLshState();
     }
 
     void publishAllHomieNodeStates()
@@ -421,6 +440,7 @@ public:
 
         virtualDevice.clearDirtyActuators();
         authoritativeStateDirty = false;
+        cachedStateRepliesEnabled = true;
     }
 
     void handleArdComMessage(constants::DeserializeExitCode code, const JsonDocument &doc)
@@ -562,7 +582,10 @@ public:
             return true;
 
         case Command::REQUEST_STATE:
-            ardCom.sendJson(constants::payloads::StaticType::ASK_STATE);
+            if (!tryServeCachedStateRequest())
+            {
+                ardCom.sendJson(constants::payloads::StaticType::ASK_STATE);
+            }
             return true;
 
         case Command::FAILOVER:
@@ -736,7 +759,7 @@ BridgeIdentity::BridgeIdentity(const char *firmwareName,
 void BridgeIdentity::resetToDefaults()
 {
     firmwareName_.assign("lsh-homie");
-    firmwareVersion_.assign("1.0.0");
+    firmwareVersion_.assign("1.0.1");
     homieBrand_.assign("LaboSmartHome");
 }
 

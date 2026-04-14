@@ -176,6 +176,19 @@ void ArdCom::sendJson(const char *buffer, size_t length)
     this->updateLastSentTime();
 }
 
+void ArdCom::refreshPendingActuatorBatchStateLocked(bool restartSettleWindow)
+{
+    this->actuatorCommandBatchPending = (this->desiredDirtyActuators.count() > 0U);
+    if (!this->actuatorCommandBatchPending)
+    {
+        this->lastDesiredActuatorUpdate_ms = 0U;
+    }
+    else if (restartSettleWindow)
+    {
+        this->lastDesiredActuatorUpdate_ms = timeKeeper::getRealTime();
+    }
+}
+
 auto ArdCom::stageSingleActuatorCommand(uint8_t actuatorId, bool state) -> bool
 {
     DP_CONTEXT();
@@ -187,11 +200,32 @@ auto ArdCom::stageSingleActuatorCommand(uint8_t actuatorId, bool state) -> bool
         return false;
     }
 
+    const bool authoritativeState = this->m_virtualDevice.getStateByIndex(actuatorIndex);
+
     portENTER_CRITICAL(&this->actuatorCommandMux);
+    // If this exact actuator already has the same target value staged in the
+    // currently pending batch, treat the repeat as a no-op so it doesn't keep
+    // stretching the settle window for everyone else.
+    if (this->actuatorCommandBatchPending &&
+        this->desiredDirtyActuators.test(actuatorIndex) &&
+        this->desiredActuatorStates[actuatorIndex] == state)
+    {
+        DPL("Ignoring duplicate pending actuator command for ID ", actuatorId);
+        portEXIT_CRITICAL(&this->actuatorCommandMux);
+        return true;
+    }
+
     this->desiredActuatorStates[actuatorIndex] = state;
-    this->desiredDirtyActuators.set(actuatorIndex);
-    this->actuatorCommandBatchPending = true;
-    this->lastDesiredActuatorUpdate_ms = timeKeeper::getRealTime();
+    if (state == authoritativeState)
+    {
+        this->desiredDirtyActuators.reset(actuatorIndex);
+    }
+    else
+    {
+        this->desiredDirtyActuators.set(actuatorIndex);
+    }
+
+    this->refreshPendingActuatorBatchStateLocked(true);
     ++this->desiredActuatorRevision;
     portEXIT_CRITICAL(&this->actuatorCommandMux);
     return true;
@@ -230,14 +264,38 @@ auto ArdCom::stageDesiredPackedState(const JsonArrayConst &packedBytes) -> bool
     }
 
     portENTER_CRITICAL(&this->actuatorCommandMux);
+    bool snapshotAlreadyPending = this->actuatorCommandBatchPending;
+    if (snapshotAlreadyPending)
+    {
+        for (std::uint8_t index = 0U; index < totalActuators; ++index)
+        {
+            if (this->desiredActuatorStates[index] != desiredSnapshot[index])
+            {
+                snapshotAlreadyPending = false;
+                break;
+            }
+        }
+    }
+
+    // Repeating the exact same full-state snapshot while it is already pending
+    // should not restart the settle window.
+    if (snapshotAlreadyPending)
+    {
+        DPL("Ignoring duplicate pending SET_STATE snapshot.");
+        portEXIT_CRITICAL(&this->actuatorCommandMux);
+        return true;
+    }
+
     this->desiredDirtyActuators.reset();
     for (std::uint8_t index = 0U; index < totalActuators; ++index)
     {
         this->desiredActuatorStates[index] = desiredSnapshot[index];
-        this->desiredDirtyActuators.set(index);
+        if (desiredSnapshot[index] != this->m_virtualDevice.getStateByIndex(index))
+        {
+            this->desiredDirtyActuators.set(index);
+        }
     }
-    this->actuatorCommandBatchPending = true;
-    this->lastDesiredActuatorUpdate_ms = timeKeeper::getRealTime();
+    this->refreshPendingActuatorBatchStateLocked(true);
     ++this->desiredActuatorRevision;
     portEXIT_CRITICAL(&this->actuatorCommandMux);
 
@@ -294,7 +352,8 @@ void ArdCom::processPendingActuatorBatch()
         if (this->desiredActuatorRevision == desiredRevision)
         {
             this->desiredDirtyActuators.reset();
-            this->actuatorCommandBatchPending = false;
+            this->refreshPendingActuatorBatchStateLocked();
+            DPL("Dropping pending actuator batch: already matches authoritative state.");
         }
         portEXIT_CRITICAL(&this->actuatorCommandMux);
         return;
@@ -327,7 +386,8 @@ void ArdCom::processPendingActuatorBatch()
     portENTER_CRITICAL(&this->actuatorCommandMux);
     if (this->desiredActuatorRevision == desiredRevision)
     {
-        this->actuatorCommandBatchPending = false;
+        this->desiredDirtyActuators.reset();
+        this->refreshPendingActuatorBatchStateLocked();
     }
     portEXIT_CRITICAL(&this->actuatorCommandMux);
 }
@@ -341,8 +401,7 @@ void ArdCom::clearPendingActuatorBatch()
         this->desiredActuatorStates[actuatorIndex] = authoritativeState;
     }
     this->desiredDirtyActuators.reset();
-    this->actuatorCommandBatchPending = false;
-    this->lastDesiredActuatorUpdate_ms = 0U;
+    this->refreshPendingActuatorBatchStateLocked();
     ++this->desiredActuatorRevision;
     portEXIT_CRITICAL(&this->actuatorCommandMux);
 }
@@ -369,6 +428,13 @@ void ArdCom::reconcileDesiredActuatorStatesFromAuthoritative()
                 this->desiredActuatorStates[actuatorIndex] = authoritativeState;
             }
         }
+
+        const bool wasBatchPending = this->actuatorCommandBatchPending;
+        this->refreshPendingActuatorBatchStateLocked();
+        if (wasBatchPending && !this->actuatorCommandBatchPending)
+        {
+            DPL("Cleared pending actuator batch during authoritative reconciliation.");
+        }
     }
     else
     {
@@ -377,6 +443,7 @@ void ArdCom::reconcileDesiredActuatorStatesFromAuthoritative()
             this->desiredActuatorStates[actuatorIndex] = this->m_virtualDevice.getStateByIndex(actuatorIndex);
         }
         this->desiredDirtyActuators.reset();
+        this->refreshPendingActuatorBatchStateLocked();
         ++this->desiredActuatorRevision;
     }
     portEXIT_CRITICAL(&this->actuatorCommandMux);

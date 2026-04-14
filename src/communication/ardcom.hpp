@@ -56,6 +56,7 @@ private:
 
     void updateLastSentTime();     // Set last time payload has been sent to now
     void updateLastReceivedTime(); // Set last time payload has been received to now
+    void refreshPendingActuatorBatchStateLocked(bool restartSettleWindow = false); // Recomputes pending/timestamp invariants from dirty bits. Must be called with actuatorCommandMux held.
 
 public:
     /**

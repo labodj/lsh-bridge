@@ -1,6 +1,6 @@
 {
   "name": "lsh-bridge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Reusable ESP32 bridge runtime for the LSH ecosystem, connecting serial controllers to MQTT and Homie.",
   "keywords": ["lsh", "esp32", "mqtt", "homie", "bridge"],
   "authors": [

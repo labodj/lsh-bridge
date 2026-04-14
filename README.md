@@ -34,7 +34,7 @@ The public surface is intentionally small:
 #include <lsh_esp_bridge.hpp>
 
 lsh::esp::BridgeOptions options;
-options.identity.setFirmwareVersion("1.0.0");
+options.identity.setFirmwareVersion("1.0.1");
 lsh::esp::LSHEspBridge bridge(options);
 
 void setup() {
