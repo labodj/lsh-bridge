@@ -1,0 +1,196 @@
+#include "virtualdevice.hpp"
+
+#include "constants/configs/vdev.hpp"
+#include "debug/debug.hpp"
+
+/**
+ * @brief Sets the device name.
+ * @param deviceName The name of the device.
+ */
+void VirtualDevice::setName(const char *const deviceName)
+{
+    DP_CONTEXT();
+    DPL("↑ Name: ", deviceName);
+
+    this->name.assign(deviceName);
+}
+
+/**
+ * @brief Configures actuators from a JSON array of IDs.
+ * @details This method is the single source of truth for the actuator subset
+ *          cached by the bridge. It stores the original IDs, resets the state
+ *          bitset and clears pending dirty markers so the next full state frame
+ *          becomes the new baseline.
+ * @param ids A const JsonArray containing the ids.
+ */
+void VirtualDevice::setActuatorsIds(const JsonArrayConst &ids)
+{
+    DP_CONTEXT();
+    const std::uint8_t size = static_cast<uint8_t>(ids.size());
+    DPL("↑ Total actuators from JSON: ", size);
+
+    this->totalActuators = size;
+    this->actuatorsState.reset();
+    this->actuatorIds.clear();
+    this->invalidateRuntimeModel();
+
+    for (const JsonVariantConst id_variant : ids)
+    {
+        this->actuatorIds.push_back(id_variant.as<std::uint8_t>());
+    }
+}
+
+namespace
+{
+    /**
+     * @brief Lookup table for bit masks (8-bit).
+     * @details - On AVR: Essential, avoids expensive O(i) shift operations (no barrel shifter)
+     *          - On Xtensa/RISC-V (ESP32): Optional, but kept for code consistency
+     *            ESP32 has barrel shifter so `1 << i` is also O(1)
+     */
+    constexpr uint8_t BIT_MASK_8[8] = {
+        0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+} // anonymous namespace
+
+/**
+ * @brief Updates the state of all actuators from a bitpacked byte array.
+ * @details The bridge keeps a compact authoritative bitset plus a cumulative
+ *          dirty bitset. When multiple controller state frames arrive inside the
+ *          same publish window, the dirty bitset keeps the union of changes so
+ *          Homie still refreshes every actuator whose published state became stale.
+ *
+ * @param packedBytes A JsonArrayConst containing the packed bytes [byte0, byte1, ...].
+ */
+void VirtualDevice::setStateFromPackedBytes(const JsonArrayConst &packedBytes)
+{
+    DP_CONTEXT();
+    // Build new state from packed bytes using optimized loop
+    etl::bitset<constants::vDev::MAX_ACTUATORS> newState;
+
+    const std::uint8_t numBytes = static_cast<std::uint8_t>(packedBytes.size());
+    std::uint8_t actuatorIndex = 0U;
+
+    // Outer loop: iterate per byte (fewer iterations than per-actuator)
+    for (std::uint8_t byteIndex = 0U; byteIndex < numBytes && actuatorIndex < this->totalActuators; ++byteIndex)
+    {
+        const std::uint8_t packedByte = packedBytes[byteIndex].as<std::uint8_t>();
+
+        // Inner loop: unpack 8 bits from this byte
+        // Using bit operations: i & 7 is equivalent to i % 8 but MUCH faster on AVR/ESP
+        for (std::uint8_t bitIndex = 0U; bitIndex < 8U && actuatorIndex < this->totalActuators; ++bitIndex)
+        {
+            // LUT lookup: O(1), no shift needed
+            newState[actuatorIndex] = (packedByte & BIT_MASK_8[bitIndex]) != 0U;
+            ++actuatorIndex;
+        }
+    }
+
+    const etl::bitset<constants::vDev::MAX_ACTUATORS> changedBits = this->actuatorsState ^ newState;
+    this->actuatorsState = newState;
+    this->dirtyActuators |= changedBits;
+
+    this->runtimeSynchronized = true;
+    DPL(changedBits.count(), " actuators changed (from packed bytes)");
+}
+
+/**
+ * @brief Marks the cached bridge-side model as needing a fresh authoritative sync.
+ * @details The bridge keeps the last known topology and state in memory so Homie
+ *          nodes remain addressable, but commands are blocked until a new full
+ *          state frame confirms the model again.
+ */
+void VirtualDevice::invalidateRuntimeModel() noexcept
+{
+    this->runtimeSynchronized = false;
+    this->fullStatePublishPending = true;
+    this->dirtyActuators.reset();
+}
+
+/**
+ * @brief Gets the state of a single actuator by its index.
+ * @param index The index of the actuator.
+ * @return The boolean state of the actuator. Returns false if the index is out of bounds.
+ */
+auto VirtualDevice::getStateByIndex(uint8_t index) const noexcept -> bool
+{
+    if (index >= this->totalActuators)
+    {
+        return false;
+    }
+    return this->actuatorsState[index];
+}
+
+/**
+ * @brief Returns whether an actuator still needs a Homie state refresh.
+ */
+auto VirtualDevice::isActuatorDirty(uint8_t index) const noexcept -> bool
+{
+    return index < this->totalActuators && this->dirtyActuators.test(index);
+}
+
+/**
+ * @brief Clears the accumulated dirty-actuator set after a successful Homie refresh window.
+ */
+void VirtualDevice::clearDirtyActuators() noexcept
+{
+    this->dirtyActuators.reset();
+}
+
+/**
+ * @brief Returns whether the cached device model is synchronized with the controller.
+ */
+auto VirtualDevice::isRuntimeSynchronized() const noexcept -> bool
+{
+    return this->runtimeSynchronized;
+}
+
+/**
+ * @brief Returns and clears the one-shot flag that requests a full Homie state publish.
+ */
+auto VirtualDevice::consumeFullStatePublishPending() noexcept -> bool
+{
+    const bool pending = this->fullStatePublishPending;
+    this->fullStatePublishPending = false;
+    return pending;
+}
+
+/**
+ * @brief Gets the device name.
+ * @return A const reference to the device name string.
+ */
+auto VirtualDevice::getName() const -> const etl::istring &
+{
+    return this->name;
+}
+
+/**
+ * @brief Gets the ID of an actuator by its index.
+ * @param index The index of the actuator.
+ * @return A const reference to the actuator's ID string.
+ */
+auto VirtualDevice::getActuatorId(uint8_t index) const -> std::uint8_t
+{
+    return this->actuatorIds[index];
+}
+
+auto VirtualDevice::tryGetActuatorIndex(uint8_t actuatorId, std::uint8_t &outIndex) const noexcept -> bool
+{
+    for (std::uint8_t index = 0U; index < this->totalActuators; ++index)
+    {
+        if (this->actuatorIds[index] == actuatorId)
+        {
+            outIndex = index;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Gets the total number of configured actuators.
+ * @return The total count of actuators.
+ */
+auto VirtualDevice::getTotalActuators() const noexcept -> std::uint8_t
+{
+    return this->totalActuators;
+}

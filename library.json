@@ -1,0 +1,36 @@
+{
+  "name": "lsh-bridge",
+  "version": "1.0.0",
+  "description": "Reusable ESP32 bridge runtime for the LSH ecosystem, connecting serial controllers to MQTT and Homie.",
+  "keywords": ["lsh", "esp32", "mqtt", "homie", "bridge"],
+  "authors": [
+    {
+      "name": "Jacopo Labardi",
+      "url": "https://github.com/labodj",
+      "maintainer": true
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/labodj/lsh-bridge.git"
+  },
+  "homepage": "https://github.com/labodj/lsh-bridge",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "dependencies": [
+    {
+      "owner": "bblanchon",
+      "name": "ArduinoJson",
+      "version": "^6.21.6"
+    },
+    {
+      "owner": "etlcpp",
+      "name": "Embedded Template Library",
+      "version": "20.47.1"
+    },
+    {
+      "name": "homie-esp8266",
+      "version": "https://github.com/labodj/homie-esp8266.git#fe99dff8b11ce04dc69984cf45caf2c79b729b71"
+    }
+  ]
+}
