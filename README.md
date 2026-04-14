@@ -86,6 +86,24 @@ To verify the vendored protocol stays aligned:
 python3 tools/update_lsh_protocol.py --check
 ```
 
+## Updating Vendored Protocol
+
+`lsh-protocol` is vendored in this repo under `vendor/lsh-protocol` via `git subtree`.
+
+Typical update flow after pushing changes to `lsh-protocol`:
+
+```bash
+git remote add lsh-protocol git@github.com:labodj/lsh-protocol.git || \
+git remote set-url lsh-protocol git@github.com:labodj/lsh-protocol.git
+git fetch lsh-protocol
+git subtree pull --prefix=vendor/lsh-protocol lsh-protocol main --squash
+python3 tools/update_lsh_protocol.py
+python3 tools/update_lsh_protocol.py --check
+```
+
+The subtree update refreshes the vendored source-of-truth copy. The local wrapper then regenerates
+the bridge-specific outputs under `src/constants/`.
+
 ## Current boundaries
 
 Inside the library:
