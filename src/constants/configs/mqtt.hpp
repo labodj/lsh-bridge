@@ -38,11 +38,11 @@ namespace constants
                 static constexpr const char *MQTT_TOPIC_CONF = CONFIG_MQTT_TOPIC_CONF; //!< Config topic
 #endif // CONFIG_MQTT_TOPIC_CONF
 
-#ifndef CONFIG_MQTT_TOPIC_CMD
+#ifndef CONFIG_MQTT_TOPIC_MISC
                 static constexpr const char *MQTT_TOPIC_MISC = "misc"; //!< Default Miscellaneous topic
 #else
                 static constexpr const char *MQTT_TOPIC_MISC = CONFIG_MQTT_TOPIC_MISC; //!< Miscellaneous topic
-#endif // CONFIG_MQTT_TOPIC_CMD
+#endif // CONFIG_MQTT_TOPIC_MISC
 
 #ifndef CONFIG_MQTT_TOPIC_SERVICE
                 static constexpr const char *MQTT_TOPIC_SERVICE = "LSH/Node-RED/SRV"; //!< Default Service (device agnostic, like broadcast) topic
@@ -61,19 +61,19 @@ namespace constants
                 // If these assertions fail, the build will stop with a clear error message,
                 // preventing runtime buffer overflows due to misconfiguration in platformio.ini.
                 static_assert(MQTT_BASE_TOPIC_LENGTH > (std::char_traits<char>::length(MQTT_TOPIC_BASE) + vDev::MAX_NAME_LENGTH),
-                              "CONFIG_MQTT_BASE_TOPIC_LENGTH is too small for the base topic and device name.");
+                              "Derived MQTT base topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
 
                 static_assert(MQTT_MAX_IN_TOPIC_LENGTH > (MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_INPUT)),
-                              "CONFIG_MQTT_MAX_IN_TOPIC_LENGTH is too small.");
+                              "Derived MQTT input topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_INPUT, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
 
                 static_assert(MQTT_MAX_OUT_STATE_TOPIC_LENGTH > (MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_STATE)),
-                              "CONFIG_MQTT_MAX_OUT_STATE_TOPIC_LENGTH is too small.");
+                              "Derived MQTT state topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_STATE, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
 
                 static_assert(MQTT_MAX_OUT_CONF_TOPIC_LENGTH > (MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_CONF)),
-                              "CONFIG_MQTT_MAX_OUT_CONF_TOPIC_LENGTH is too small.");
+                              "Derived MQTT config topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_CONF, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
 
                 static_assert(MQTT_MAX_OUT_MISC_TOPIC_LENGTH > (MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_MISC)),
-                              "CONFIG_MQTT_MAX_OUT_MISC_TOPIC_LENGTH is too small.");
+                              "Derived MQTT misc topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_MISC, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
         } // namespace mqttConfigs
 
 } // namespace constants

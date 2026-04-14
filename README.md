@@ -52,7 +52,8 @@ See [examples/basic-homie-bridge/src/main.cpp](./examples/basic-homie-bridge/src
 
 - the library currently assumes a single active bridge instance
 - Homie remains part of the opinionated runtime surface for now
-- compile-time `CONFIG_*` knobs are still supported and intentionally preserved
+- compile-time `CONFIG_*` knobs are still supported and documented in
+  [docs/compile-time-configuration.md](./docs/compile-time-configuration.md)
 - the protocol source of truth remains vendored as `vendor/lsh-protocol`
 - firmware identity is stored in bounded ETL strings and validated before use
   (`firmwareName <= 32`, `firmwareVersion <= 16`, `homieBrand <= 21`)
@@ -71,6 +72,26 @@ The consumer project should own:
 - validation of board settings, partition layout and full-flash artifacts when the ESP32 platform changes
 - OTA and deployment tooling
 - any project-specific examples and board matrix
+
+## Compile-time Configuration
+
+`lsh-bridge` still exposes a deliberate build-time surface for capacities, serial
+wiring, MQTT topic naming, liveness timers and codec selection.
+
+The full reference lives in
+[docs/compile-time-configuration.md](./docs/compile-time-configuration.md).
+The bundled
+[example `platformio.ini`](./examples/basic-homie-bridge/platformio.ini)
+explicitly sets the supported value macros and leaves optional behavior flags
+commented.
+
+Current supported knobs:
+
+- capacities: `CONFIG_MAX_ACTUATORS`, `CONFIG_MAX_BUTTONS`, `CONFIG_MAX_NAME_LENGTH`
+- serial: `CONFIG_ARDCOM_SERIAL_RX_PIN`, `CONFIG_ARDCOM_SERIAL_TX_PIN`, `CONFIG_ARDCOM_SERIAL_BAUD`, `CONFIG_ARDCOM_SERIAL_TIMEOUT_MS`
+- MQTT topics: `CONFIG_MQTT_TOPIC_BASE`, `CONFIG_MQTT_TOPIC_INPUT`, `CONFIG_MQTT_TOPIC_STATE`, `CONFIG_MQTT_TOPIC_CONF`, `CONFIG_MQTT_TOPIC_MISC`, `CONFIG_MQTT_TOPIC_SERVICE`
+- liveness: `CONFIG_PING_INTERVAL_CONTROLLINO_MS`, `CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS`
+- codecs and flags: `CONFIG_MSG_PACK_ARDUINO`, `CONFIG_MSG_PACK_MQTT`, `LSH_DEBUG`, `HOMIE_RESET`
 
 ## Development
 
