@@ -30,7 +30,7 @@
     },
     {
       "name": "homie-esp8266",
-      "version": "https://github.com/labodj/homie-esp8266.git#fe99dff8b11ce04dc69984cf45caf2c79b729b71"
+      "version": "https://github.com/labodj/homie-esp8266.git#v3.1.0"
     }
   ]
 }
