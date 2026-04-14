@@ -68,6 +68,7 @@ The consumer project should own:
 - the PlatformIO environment
 - firmware identity and release/versioning policy
 - serial pin overrides and other `CONFIG_*` choices
+- validation of board settings, partition layout and full-flash artifacts when the ESP32 platform changes
 - OTA and deployment tooling
 - any project-specific examples and board matrix
 
@@ -127,5 +128,25 @@ Validated target:
 
 - ESP32
 - `pioarduino/platform-espressif32`
+
+Recommended PlatformIO configuration:
+
+```ini
+platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+framework = arduino
+board = esp32dev
+```
+
+`stable` is a moving release alias. The exact Arduino core / ESP-IDF toolchain
+behind it can change over time, so each `lsh-bridge` release should be validated
+against the current `stable` platform release before deployment.
+
+`lsh-bridge` itself cannot pin the PlatformIO platform version for consumers.
+That choice belongs to the consumer project.
+
+OTA updates only the application image (`firmware.bin`). It does not update the
+bootloader, partition table or other full-flash artifacts. If the ESP32 platform
+update changes those artifacts, validate them explicitly and use a full USB/serial
+flash when required.
 
 ESP8266 compatibility is not a design goal of this repo.
