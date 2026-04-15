@@ -26,6 +26,37 @@ At runtime it:
 - coalesces actuator command bursts before writing `SET_STATE` back to the controller
 - re-synchronizes the runtime model when MQTT becomes ready again
 
+## Typical Hardware Topology
+
+In the real LSH installation, `lsh-bridge` is typically paired one-to-one with a **Controllino Maxi** inside an electrical panel.
+
+```text
+12/24 VDC power supply
+        |
+        +-------------------------------> Controllino / lsh-core device
+        |
+        +--> 5 V buck converter -------> ESP32 / lsh-bridge
+
+Controllino front TTL serial
+        |
+        +--> 5 V / 3.3 V logic level shifter --> ESP32 UART
+
+Common ground shared by controller, buck converter, level shifter and ESP32.
+```
+
+Practical notes from the live installation:
+
+- the bridge talks to the controller over the Controllino front TTL interface, not over USB
+- when the controller side is 5 V logic and the ESP32 side is 3.3 V logic, a level shifter is required on the UART path
+- the ESP32 is powered from a dedicated 5 V rail derived from the same 12/24 V source used by the controller
+- current panel revisions use more solid connectorized controller-to-bridge wiring rather than temporary jumper-pin links
+- some panels expose short USB extension cables outside the enclosure so bridge firmware can be flashed without reopening internal wiring
+
+This repo stays focused on the reusable bridge runtime, but the hardware context matters because it explains why the bridge is intentionally narrow: serial in, MQTT/Homie out, no ownership of the field I/O itself.
+
+For a system-level view of the installation pattern, see the public landing repo hardware notes:
+[Labo Smart Home hardware overview](https://github.com/labodj/labo-smart-home/blob/main/HARDWARE_OVERVIEW.md)
+
 ## Public API
 
 The public surface is intentionally small:
