@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use or reference lsh-bridge, please cite it using the metadata below."
+title: "lsh-bridge"
+type: software
+authors:
+  - family-names: "Labardi"
+    given-names: "Jacopo"
+repository-code: "https://github.com/labodj/lsh-bridge"
+url: "https://github.com/labodj/lsh-bridge"
+license: "Apache-2.0"
+abstract: "Reusable ESP32 bridge runtime for the LSH ecosystem, connecting serial controllers to MQTT and Homie."
+keywords:
+  - esp32
+  - mqtt
+  - homie
+  - embedded
+  - smart-home
+  - lsh
