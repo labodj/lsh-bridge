@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use or reference lsh-protocol, please cite it using the metadata below."
+title: "lsh-protocol"
+type: software
+authors:
+  - family-names: "Labardi"
+    given-names: "Jacopo"
+repository-code: "https://github.com/labodj/lsh-protocol"
+url: "https://github.com/labodj/lsh-protocol"
+license: "Apache-2.0"
+abstract: "Single source of truth for the LSH wire protocol, with compact specification, generators and golden payloads."
+keywords:
+  - protocol
+  - code-generation
+  - mqtt
+  - embedded
+  - smart-home
+  - lsh
