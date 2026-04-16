@@ -155,6 +155,12 @@ namespace lsh::esp
 class LSHEspBridge::Impl
 {
 public:
+    enum class MqttCommandSource : std::uint8_t
+    {
+        Device,
+        Service
+    };
+
     enum class HandshakeState
     {
         IDLE,
@@ -166,6 +172,14 @@ public:
 
     static constexpr std::uint32_t DEVICE_INFO_REQUEST_INTERVAL_MS = 500U;
     static constexpr std::uint32_t STATE_PUBLISH_SETTLE_INTERVAL_MS = 40U;
+    static constexpr std::uint8_t MQTT_COMMAND_QUEUE_CAPACITY = 8U;
+
+    struct QueuedMqttCommand
+    {
+        MqttCommandSource source = MqttCommandSource::Device;
+        std::uint16_t length = 0U;
+        std::uint8_t payload[constants::ardCom::RAW_MESSAGE_MAX_SIZE]{};
+    };
 
     explicit Impl(BridgeOptions bridgeOptions)
         : options(std::move(bridgeOptions)),
@@ -180,12 +194,19 @@ public:
     HandshakeState handshakeState = HandshakeState::IDLE;
     bool authoritativeStateDirty = false;
     bool cachedStateRepliesEnabled = false;
+    bool controllerConnected = false;
     std::uint32_t lastAuthoritativeStateUpdate_ms = 0U;
     etl::vector<LSHNode, constants::vDev::MAX_ACTUATORS> nodes{};
     VirtualDevice virtualDevice{};
     HardwareSerial *const serial;
     ArdCom ardCom;
     AsyncMqttClient *mqttClient = nullptr;
+    AsyncMqttClient *mqttMessageBoundClient = nullptr;
+    QueuedMqttCommand mqttCommandQueue[MQTT_COMMAND_QUEUE_CAPACITY]{};
+    portMUX_TYPE mqttCommandQueueMux = portMUX_INITIALIZER_UNLOCKED;
+    std::uint8_t mqttCommandQueueHead = 0U;
+    std::uint8_t mqttCommandQueueTail = 0U;
+    std::uint8_t mqttCommandQueueCount = 0U;
 
     void configureHomie() const
     {
@@ -250,10 +271,136 @@ public:
         cachedStateRepliesEnabled = false;
     }
 
+    [[nodiscard]] auto publishCachedDetails() -> bool
+    {
+        if (!virtualDevice.hasCachedDetails())
+        {
+            return false;
+        }
+
+        StaticJsonDocument<constants::ardCom::JSON_RECEIVED_MAX_SIZE> doc;
+        if (!virtualDevice.populateDetailsDocument(doc))
+        {
+            return false;
+        }
+
+        return NodeCom::sendJson(doc, MqttTopicsBuilder::mqttOutConfTopic.c_str(), true, 1);
+    }
+
+    void requestAuthoritativeStateRefresh()
+    {
+        clearPendingRuntimeState();
+        ardCom.sendJson(constants::payloads::StaticType::ASK_STATE);
+    }
+
+    void softResyncMqttPeer()
+    {
+        if (!virtualDevice.hasCachedDetails())
+        {
+            Homie.reboot();
+            return;
+        }
+
+        if (!publishCachedDetails())
+        {
+            cachedStateRepliesEnabled = false;
+            return;
+        }
+
+        const bool controllerStateUsable = virtualDevice.isRuntimeSynchronized() && ardCom.isConnected();
+        if (controllerStateUsable)
+        {
+            cachedStateRepliesEnabled = publishAuthoritativeLshState();
+            return;
+        }
+
+        cachedStateRepliesEnabled = false;
+        virtualDevice.invalidateRuntimeModel();
+
+        if (ardCom.isConnected())
+        {
+            requestAuthoritativeStateRefresh();
+        }
+    }
+
+    void refreshControllerConnectivity()
+    {
+        const bool connectedNow = ardCom.isConnected();
+        if (connectedNow == controllerConnected)
+        {
+            return;
+        }
+
+        controllerConnected = connectedNow;
+        if (!connectedNow)
+        {
+            clearPendingRuntimeState();
+            virtualDevice.invalidateRuntimeModel();
+            return;
+        }
+
+        if (!virtualDevice.isRuntimeSynchronized())
+        {
+            requestAuthoritativeStateRefresh();
+        }
+    }
+
+    [[nodiscard]] auto enqueueMqttCommand(MqttCommandSource source,
+                                          const char *payload,
+                                          std::size_t length) -> bool
+    {
+        if (payload == nullptr || length == 0U || length > constants::ardCom::RAW_MESSAGE_MAX_SIZE)
+        {
+            return false;
+        }
+
+        bool queued = false;
+        portENTER_CRITICAL(&mqttCommandQueueMux);
+        if (mqttCommandQueueCount < MQTT_COMMAND_QUEUE_CAPACITY)
+        {
+            auto &slot = mqttCommandQueue[mqttCommandQueueTail];
+            slot.source = source;
+            std::memcpy(slot.payload, payload, length);
+            slot.length = static_cast<std::uint16_t>(length);
+            mqttCommandQueueTail = static_cast<std::uint8_t>((mqttCommandQueueTail + 1U) % MQTT_COMMAND_QUEUE_CAPACITY);
+            ++mqttCommandQueueCount;
+            queued = true;
+        }
+        portEXIT_CRITICAL(&mqttCommandQueueMux);
+
+        return queued;
+    }
+
+    [[nodiscard]] auto dequeueMqttCommand(QueuedMqttCommand &outCommand) -> bool
+    {
+        bool dequeued = false;
+        portENTER_CRITICAL(&mqttCommandQueueMux);
+        if (mqttCommandQueueCount > 0U)
+        {
+            outCommand = mqttCommandQueue[mqttCommandQueueHead];
+            mqttCommandQueueHead = static_cast<std::uint8_t>((mqttCommandQueueHead + 1U) % MQTT_COMMAND_QUEUE_CAPACITY);
+            --mqttCommandQueueCount;
+            dequeued = true;
+        }
+        portEXIT_CRITICAL(&mqttCommandQueueMux);
+
+        return dequeued;
+    }
+
+    void clearQueuedMqttCommands()
+    {
+        portENTER_CRITICAL(&mqttCommandQueueMux);
+        mqttCommandQueueHead = 0U;
+        mqttCommandQueueTail = 0U;
+        mqttCommandQueueCount = 0U;
+        portEXIT_CRITICAL(&mqttCommandQueueMux);
+    }
+
     void handleDisconnect()
     {
         mqttClient = nullptr;
         clearPendingRuntimeState();
+        clearQueuedMqttCommands();
     }
 
     void bootstrapDevice()
@@ -265,12 +412,13 @@ public:
         {
             handshakeState = HandshakeState::WAITING_FOR_DETAILS;
             std::uint32_t lastRequest_ms = 0U;
+            bool requestDue = true;
 
             while (handshakeState != HandshakeState::COMPLETE && handshakeState != HandshakeState::FAIL_RESTART)
             {
                 const auto now = timeKeeper::getRealTime();
 
-                if ((now - lastRequest_ms) > DEVICE_INFO_REQUEST_INTERVAL_MS)
+                if (requestDue || (now - lastRequest_ms) > DEVICE_INFO_REQUEST_INTERVAL_MS)
                 {
                     if (handshakeState == HandshakeState::WAITING_FOR_DETAILS)
                     {
@@ -281,6 +429,7 @@ public:
                         ardCom.sendJson(constants::payloads::StaticType::ASK_STATE);
                     }
                     lastRequest_ms = now;
+                    requestDue = false;
                 }
 
                 if (serial->available())
@@ -301,7 +450,10 @@ public:
 
         if (code == DeserializeExitCode::OK_BOOT)
         {
-            handshakeState = HandshakeState::FAIL_RESTART;
+            if (handshakeState == HandshakeState::WAITING_FOR_STATE)
+            {
+                handshakeState = HandshakeState::FAIL_RESTART;
+            }
             return;
         }
 
@@ -313,6 +465,11 @@ public:
                 if (ardCom.storeDetailsFromReceived() == DeserializeExitCode::OK_DETAILS)
                 {
                     handshakeState = HandshakeState::WAITING_FOR_STATE;
+                    // Request the authoritative actuator snapshot immediately
+                    // once the topology is known. The bootstrap loop still keeps
+                    // its normal retry interval, so this only removes the first
+                    // avoidable 500 ms gap between DETAILS and STATE.
+                    ardCom.sendJson(constants::payloads::StaticType::ASK_STATE);
                 }
                 else
                 {
@@ -383,7 +540,7 @@ public:
         // Otherwise Node-RED's paired REQUEST_DETAILS + REQUEST_STATE recovery
         // cycle can observe state before details and later discard that state
         // when the fresh details arrive.
-        if (!cachedStateRepliesEnabled || !virtualDevice.isRuntimeSynchronized())
+        if (!cachedStateRepliesEnabled || !virtualDevice.isRuntimeSynchronized() || !ardCom.isConnected())
         {
             return false;
         }
@@ -464,23 +621,11 @@ public:
             break;
 
         case DeserializeExitCode::OK_DETAILS:
-        {
-            const auto detailsResult = ardCom.storeDetailsFromReceived();
-            if (detailsResult != DeserializeExitCode::OK_DETAILS)
-            {
-                Homie.reboot();
-                break;
-            }
-
-            if (virtualDevice.getTotalActuators() != nodes.size())
-            {
-                Homie.reboot();
-                break;
-            }
-
-            NodeCom::sendJson(doc, MqttTopicsBuilder::mqttOutConfTopic.c_str(), true, 1);
+            // After bootstrap the bridge treats device topology as immutable.
+            // Runtime DEVICE_DETAILS frames are ignored: configuration drift is
+            // recovered through BOOT-driven bridge restarts, while transient
+            // MQTT resyncs reuse the cached details snapshot directly.
             break;
-        }
 
         case DeserializeExitCode::OK_NETWORK_CLICK:
             if (Homie.isConnected())
@@ -517,9 +662,7 @@ public:
         case HomieEventType::MQTT_READY:
             if (updateMqttClient() && subscribeMqttTopics())
             {
-                clearPendingRuntimeState();
-                virtualDevice.invalidateRuntimeModel();
-                ardCom.sendJson(constants::payloads::StaticType::BOOT);
+                softResyncMqttPeer();
             }
             break;
 
@@ -542,7 +685,15 @@ public:
 
         mqttClient = nextClient;
         NodeCom::setMqttClient(mqttClient);
-        mqttClient->onMessage(LSHEspBridge::onMqttMessageStatic_);
+        // AsyncMqttClient stores every onMessage callback that is registered.
+        // The Homie MQTT client object survives reconnects, so blindly adding the
+        // bridge handler on every MQTT_READY would make each inbound MQTT frame
+        // execute the bridge logic multiple times after reconnects.
+        if (mqttMessageBoundClient != nextClient)
+        {
+            mqttClient->onMessage(LSHEspBridge::onMqttMessageStatic_);
+            mqttMessageBoundClient = nextClient;
+        }
         return true;
     }
 
@@ -578,13 +729,23 @@ public:
         switch (cmd)
         {
         case Command::REQUEST_DETAILS:
-            ardCom.sendJson(constants::payloads::StaticType::ASK_DETAILS);
+            if (!virtualDevice.hasCachedDetails())
+            {
+                Homie.reboot();
+            }
+            else
+            {
+                (void)publishCachedDetails();
+            }
             return true;
 
         case Command::REQUEST_STATE:
             if (!tryServeCachedStateRequest())
             {
-                ardCom.sendJson(constants::payloads::StaticType::ASK_STATE);
+                if (ardCom.isConnected())
+                {
+                    requestAuthoritativeStateRefresh();
+                }
             }
             return true;
 
@@ -634,7 +795,88 @@ public:
         }
     }
 
-    void processInboundMqttCommand(const char *payload, std::size_t length)
+    void forwardOrTranslateToController(const char *payload,
+                                        std::size_t length,
+                                        const JsonDocument &doc)
+    {
+#if (defined(CONFIG_MSG_PACK_MQTT) && defined(CONFIG_MSG_PACK_ARDUINO)) || \
+    (!defined(CONFIG_MSG_PACK_MQTT) && !defined(CONFIG_MSG_PACK_ARDUINO))
+        ardCom.sendJson(payload, length);
+#else
+        ardCom.sendJson(doc);
+#endif
+    }
+
+    void processDeviceTopicCommand(LSH::protocol::Command cmd,
+                                   const char *payload,
+                                   std::size_t length,
+                                   const JsonDocument &doc)
+    {
+        using namespace LSH::protocol;
+
+        switch (cmd)
+        {
+        case Command::SYSTEM_RESET:
+            Homie.reset();
+            Homie.setIdle(true);
+            return;
+
+        case Command::SYSTEM_REBOOT:
+            Homie.reboot();
+            return;
+
+        case Command::PING_:
+            NodeCom::sendJson(constants::payloads::StaticType::PING_);
+            return;
+
+        case Command::SET_SINGLE_ACTUATOR:
+        case Command::SET_STATE:
+            if (!virtualDevice.isRuntimeSynchronized())
+            {
+                forwardOrTranslateToController(payload, length, doc);
+                return;
+            }
+            break;
+
+        default:
+            break;
+        }
+
+        if (!forwardTypedControllerCommand(doc))
+        {
+            forwardOrTranslateToController(payload, length, doc);
+        }
+    }
+
+    void processServiceTopicCommand(LSH::protocol::Command cmd)
+    {
+        using namespace LSH::protocol;
+
+        switch (cmd)
+        {
+        case Command::BOOT:
+            softResyncMqttPeer();
+            return;
+
+        case Command::SYSTEM_RESET:
+            Homie.reset();
+            Homie.setIdle(true);
+            return;
+
+        case Command::SYSTEM_REBOOT:
+            Homie.reboot();
+            return;
+
+        case Command::PING_:
+            NodeCom::sendJson(constants::payloads::StaticType::PING_);
+            return;
+
+        default:
+            return;
+        }
+    }
+
+    void processInboundMqttCommand(MqttCommandSource source, const char *payload, std::size_t length)
     {
         using namespace LSH::protocol;
 
@@ -664,45 +906,28 @@ public:
         }
 
         const auto cmd = static_cast<Command>(rawCommand);
-        switch (cmd)
+        if (source == MqttCommandSource::Service)
         {
-        case Command::SYSTEM_RESET:
-            Homie.reset();
-            Homie.setIdle(true);
+            processServiceTopicCommand(cmd);
             return;
-
-        case Command::SYSTEM_REBOOT:
-            Homie.reboot();
-            return;
-
-        case Command::PING_:
-            NodeCom::sendJson(constants::payloads::StaticType::PING_);
-            return;
-
-        case Command::SET_SINGLE_ACTUATOR:
-        case Command::SET_STATE:
-            if (!virtualDevice.isRuntimeSynchronized())
-            {
-#if (defined(CONFIG_MSG_PACK_MQTT) && defined(CONFIG_MSG_PACK_ARDUINO)) || \
-    (!defined(CONFIG_MSG_PACK_MQTT) && !defined(CONFIG_MSG_PACK_ARDUINO))
-                ardCom.sendJson(payload, length);
-#else
-                ardCom.sendJson(doc);
-#endif
-                return;
-            }
-            break;
-
-        default:
-            break;
         }
 
-        if (!forwardTypedControllerCommand(doc))
+        processDeviceTopicCommand(cmd, payload, length, doc);
+    }
+
+    void processQueuedMqttCommands()
+    {
+        while (!serial->available())
         {
-#if (defined(CONFIG_MSG_PACK_MQTT) && defined(CONFIG_MSG_PACK_ARDUINO)) || \
-    (!defined(CONFIG_MSG_PACK_MQTT) && !defined(CONFIG_MSG_PACK_ARDUINO))
-            ardCom.sendJson(payload, length);
-#endif
+            QueuedMqttCommand queuedCommand{};
+            if (!dequeueMqttCommand(queuedCommand))
+            {
+                return;
+            }
+
+            processInboundMqttCommand(queuedCommand.source,
+                                      reinterpret_cast<const char *>(queuedCommand.payload),
+                                      queuedCommand.length);
         }
     }
 
@@ -714,8 +939,16 @@ public:
                            std::size_t total)
     {
         const auto topicHash = djb2_hash(topic);
-        if (topicHash != MqttTopicsBuilder::mqttInTopicHash &&
-            topicHash != constants::mqtt::MQTT_TOPIC_SERVICE_HASH)
+        MqttCommandSource source = MqttCommandSource::Device;
+        if (topicHash == MqttTopicsBuilder::mqttInTopicHash)
+        {
+            source = MqttCommandSource::Device;
+        }
+        else if (topicHash == constants::mqtt::MQTT_TOPIC_SERVICE_HASH)
+        {
+            source = MqttCommandSource::Service;
+        }
+        else
         {
             return;
         }
@@ -735,7 +968,7 @@ public:
             return;
         }
 
-        processInboundMqttCommand(payload, total);
+        (void)enqueueMqttCommand(source, payload, total);
     }
 };
 
@@ -759,7 +992,7 @@ BridgeIdentity::BridgeIdentity(const char *firmwareName,
 void BridgeIdentity::resetToDefaults()
 {
     firmwareName_.assign("lsh-homie");
-    firmwareVersion_.assign("1.0.1");
+        firmwareVersion_.assign("1.0.2");
     homieBrand_.assign("LaboSmartHome");
 }
 
@@ -820,6 +1053,7 @@ void LSHEspBridge::begin()
     impl_->configureHomie();
     Homie.onEvent(onHomieEventStatic_);
     impl_->bootstrapDevice();
+    impl_->controllerConnected = impl_->ardCom.isConnected();
 
     auto mainDelegate = ArdCom::MessageCallback::create<Impl, &Impl::handleArdComMessage>(*impl_);
     impl_->ardCom.onMessage(mainDelegate);
@@ -849,6 +1083,8 @@ void LSHEspBridge::loop()
         impl_->ardCom.processSerialBuffer();
     }
 
+    impl_->processQueuedMqttCommands();
+    impl_->refreshControllerConnectivity();
     impl_->ardCom.processPendingActuatorBatch();
     impl_->processPendingStatePublishes();
     impl_->ardCom.sendJson(constants::payloads::StaticType::PING_);

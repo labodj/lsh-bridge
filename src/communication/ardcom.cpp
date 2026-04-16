@@ -20,6 +20,13 @@ using constants::DeserializeExitCode;
 
 namespace
 {
+    struct ValidatedDetailsPayload
+    {
+        const char *deviceName = nullptr;
+        JsonArrayConst actuatorIds;
+        JsonArrayConst buttonIds;
+    };
+
     constexpr std::uint8_t BIT_MASK_8[8] = {
         0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U};
 
@@ -76,6 +83,71 @@ namespace
         }
 
         return true;
+    }
+
+    auto validateReceivedDetailsPayload(const JsonDocument &receivedDoc,
+                                        ValidatedDetailsPayload &outPayload) -> DeserializeExitCode
+    {
+        using namespace LSH::protocol;
+
+        const JsonVariantConst protocolMajor = receivedDoc[KEY_PROTOCOL_MAJOR];
+        std::uint8_t validatedProtocolMajor = 0U;
+        if (!tryGetUint8Scalar(protocolMajor, validatedProtocolMajor))
+        {
+            DPL("Error: Missing or invalid 'v' key in device details JSON.");
+            return DeserializeExitCode::ERR_MISSING_KEY_PROTOCOL_MAJOR;
+        }
+
+        if (validatedProtocolMajor != WIRE_PROTOCOL_MAJOR)
+        {
+            DPL("Error: Protocol major mismatch. Received ", validatedProtocolMajor, ", expected ", WIRE_PROTOCOL_MAJOR, ".");
+            return DeserializeExitCode::ERR_PROTOCOL_MAJOR_MISMATCH;
+        }
+
+        outPayload.deviceName = receivedDoc[KEY_NAME];
+        if (outPayload.deviceName == nullptr)
+        {
+            return DeserializeExitCode::ERR_NO_NAME;
+        }
+
+        const std::size_t deviceNameLength = std::strlen(outPayload.deviceName);
+        if (deviceNameLength == 0U)
+        {
+            return DeserializeExitCode::ERR_NO_NAME;
+        }
+        if (deviceNameLength > constants::vDev::MAX_NAME_LENGTH)
+        {
+            DPL("Error: Device name is too long for this bridge build.");
+            return DeserializeExitCode::ERR_NAME_TOO_LONG;
+        }
+
+        outPayload.actuatorIds = receivedDoc[KEY_ACTUATORS_ARRAY].as<JsonArrayConst>();
+        if (outPayload.actuatorIds.isNull())
+        {
+            DPL("Error: Missing 'a' key in device details JSON.");
+            return DeserializeExitCode::ERR_MISSING_KEY_ACTUATORS_IDS;
+        }
+
+        outPayload.buttonIds = receivedDoc[KEY_BUTTONS_ARRAY].as<JsonArrayConst>();
+        if (outPayload.buttonIds.isNull())
+        {
+            DPL("Error: Missing 'b' key in device details JSON.");
+            return DeserializeExitCode::ERR_MISSING_KEY_BUTTONS_IDS;
+        }
+
+        if (!validatePositiveUniqueIds(outPayload.actuatorIds, constants::vDev::MAX_ACTUATORS))
+        {
+            DPL("Error: Invalid actuator IDs in device details JSON.");
+            return DeserializeExitCode::ERR_ACTUATOR_ID_IMPLAUSIBLE;
+        }
+
+        if (!validatePositiveUniqueIds(outPayload.buttonIds, constants::vDev::MAX_BUTTONS))
+        {
+            DPL("Error: Invalid button IDs in device details JSON.");
+            return DeserializeExitCode::ERR_BUTTON_ID_IMPLAUSIBLE;
+        }
+
+        return DeserializeExitCode::OK_DETAILS;
     }
 
 } // namespace
@@ -639,85 +711,26 @@ auto ArdCom::storeStateFromReceived() const -> constants::DeserializeExitCode
 }
 
 /**
- * @brief Validate and store the bridge-relevant subset of received details.
- * @details ArdCom extracts the JSON objects and delegates the model update to
- *          VirtualDevice. The bridge only persists what it needs after the
- *          handshake: name, actuator IDs and actuator state baseline. Button IDs
- *          are validated for shape/sanity but are not retained. The device name
- *          must be non-empty and fit the compiled `CONFIG_MAX_NAME_LENGTH`
- *          limit of the bridge build.
+ * @brief Validate and cache received details.
+ * @details The bridge stores the full validated topology snapshot that it needs
+ *          for future cache-based replies: device name, actuator IDs and button
+ *          IDs. State validity remains independent and still requires a fresh
+ *          authoritative state frame.
  * @return constants::DeserializeExitCode the result of validation and saving.
  */
 auto ArdCom::storeDetailsFromReceived() const -> constants::DeserializeExitCode
 {
     DP_CONTEXT();
-    using namespace LSH::protocol;
-
-    // Get device name from JSON
-    const JsonVariantConst protocolMajor = this->receivedDoc[KEY_PROTOCOL_MAJOR];
-    std::uint8_t validatedProtocolMajor = 0U;
-    if (!tryGetUint8Scalar(protocolMajor, validatedProtocolMajor))
+    ValidatedDetailsPayload detailsPayload{};
+    const auto result = validateReceivedDetailsPayload(this->receivedDoc, detailsPayload);
+    if (result != DeserializeExitCode::OK_DETAILS)
     {
-        DPL("Error: Missing or invalid 'v' key in device details JSON.");
-        return DeserializeExitCode::ERR_MISSING_KEY_PROTOCOL_MAJOR;
+        return result;
     }
 
-    if (validatedProtocolMajor != WIRE_PROTOCOL_MAJOR)
-    {
-        DPL("Error: Protocol major mismatch. Received ", validatedProtocolMajor, ", expected ", WIRE_PROTOCOL_MAJOR, ".");
-        return DeserializeExitCode::ERR_PROTOCOL_MAJOR_MISMATCH;
-    }
-
-    const char *const jsonDeviceName = this->receivedDoc[KEY_NAME];
-    if (!jsonDeviceName)
-    {
-        return DeserializeExitCode::ERR_NO_NAME;
-    }
-
-    const std::size_t deviceNameLength = std::strlen(jsonDeviceName);
-    if (deviceNameLength == 0U)
-    {
-        return DeserializeExitCode::ERR_NO_NAME;
-    }
-    if (deviceNameLength > constants::vDev::MAX_NAME_LENGTH)
-    {
-        DPL("Error: Device name is too long for this bridge build.");
-        return DeserializeExitCode::ERR_NAME_TOO_LONG;
-    }
-
-    // Get actuators array from JSON
-    const JsonArrayConst actuatorsIDs = this->receivedDoc[KEY_ACTUATORS_ARRAY];
-    if (actuatorsIDs.isNull())
-    {
-        DPL("Error: Missing 'a' key in device details JSON.");
-        return DeserializeExitCode::ERR_MISSING_KEY_ACTUATORS_IDS;
-    }
-
-    // Get buttons array from JSON
-    const JsonArrayConst buttonsIDs = this->receivedDoc[KEY_BUTTONS_ARRAY];
-    if (buttonsIDs.isNull())
-    {
-        DPL("Error: Missing 'b' key in device details JSON.");
-        return DeserializeExitCode::ERR_MISSING_KEY_BUTTONS_IDS;
-    }
-
-    if (!validatePositiveUniqueIds(actuatorsIDs, constants::vDev::MAX_ACTUATORS))
-    {
-        DPL("Error: Invalid actuator IDs in device details JSON.");
-        return DeserializeExitCode::ERR_ACTUATOR_ID_IMPLAUSIBLE;
-    }
-
-    if (!validatePositiveUniqueIds(buttonsIDs, constants::vDev::MAX_BUTTONS))
-    {
-        DPL("Error: Invalid button IDs in device details JSON.");
-        return DeserializeExitCode::ERR_BUTTON_ID_IMPLAUSIBLE;
-    }
-
-    // Delegate the configuration to VirtualDevice.
-    // The code is now cleaner, more robust, and respects separation of concerns.
-    this->m_virtualDevice.setName(jsonDeviceName);
-    this->m_virtualDevice.setActuatorsIds(actuatorsIDs);
-
+    this->m_virtualDevice.setDetails(detailsPayload.deviceName,
+                                     detailsPayload.actuatorIds,
+                                     detailsPayload.buttonIds);
     return DeserializeExitCode::OK_DETAILS;
 }
 

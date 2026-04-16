@@ -25,6 +25,7 @@ At runtime it:
 - keeps an authoritative compact LSH state topic in sync
 - coalesces actuator command bursts before writing `SET_STATE` back to the controller
 - re-synchronizes the runtime model when MQTT becomes ready again
+- treats MQTT service-topic `PING` as bridge-local reachability only and MQTT service-topic `BOOT` as a bridge-local resync trigger toward the controller
 
 ## Typical Hardware Topology
 
@@ -65,7 +66,7 @@ The public surface is intentionally small:
 #include <lsh_esp_bridge.hpp>
 
 lsh::esp::BridgeOptions options;
-options.identity.setFirmwareVersion("1.0.1");
+options.identity.setFirmwareVersion("1.0.2");
 lsh::esp::LSHEspBridge bridge(options);
 
 void setup() {

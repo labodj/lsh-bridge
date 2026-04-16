@@ -40,7 +40,7 @@ namespace constants
         ERR_ACTUATORS_MISMATCH,                  //!< Received actuators state array size is different than stored total actuators
         ERR_STATE_VALUE_IMPLAUSIBLE,             //!< Received state payload contains non-byte entries
         ERR_MISSING_KEY_PROTOCOL_MAJOR,          //!< Missing handshake-only protocol major in details payload
-        ERR_PROTOCOL_MAJOR_MISMATCH,           //!< Received protocol major is not compatible with this firmware
+        ERR_PROTOCOL_MAJOR_MISMATCH,             //!< Received protocol major is not compatible with this firmware
         ERR_MISSING_KEY_ACTUATORS_IDS,           //!< Missing actuators UUIDs key from Json
         ERR_MISSING_KEY_BUTTONS_IDS,             //!< Missing buttons UUIDs key from Json
         ERR_ACTUATORS_IDS_NUMBER_IMPLAUSIBLE,    //!< Total actuators UUIDs number is different than total actuators

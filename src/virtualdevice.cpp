@@ -1,43 +1,47 @@
 #include "virtualdevice.hpp"
 
 #include "constants/configs/vdev.hpp"
+#include "constants/communicationprotocol.hpp"
 #include "debug/debug.hpp"
 
+namespace
+{
+    template <std::size_t Capacity>
+    void copyValidatedIds(const JsonArrayConst &source,
+                          etl::vector<std::uint8_t, Capacity> &target)
+    {
+        target.clear();
+        for (const JsonVariantConst idVariant : source)
+        {
+            target.push_back(idVariant.as<std::uint8_t>());
+        }
+    }
+
+} // namespace
+
 /**
- * @brief Sets the device name.
- * @param deviceName The name of the device.
+ * @brief Caches the validated bootstrap topology snapshot.
+ * @details Details and runtime validity are separate concerns. Updating the
+ *          cached topology invalidates the runtime state, because the next
+ *          authoritative state frame must become the new baseline for that
+ *          topology.
  */
-void VirtualDevice::setName(const char *const deviceName)
+void VirtualDevice::setDetails(const char *const deviceName,
+                               const JsonArrayConst &actuatorIds,
+                               const JsonArrayConst &buttonIds)
 {
     DP_CONTEXT();
     DPL("↑ Name: ", deviceName);
+    DPL("↑ Total actuators from JSON: ", actuatorIds.size());
+    DPL("↑ Total buttons from JSON: ", buttonIds.size());
 
     this->name.assign(deviceName);
-}
-
-/**
- * @brief Configures actuators from a JSON array of IDs.
- * @details This method is the single source of truth for the actuator subset
- *          cached by the bridge. It stores the original IDs, resets the state
- *          bitset and clears pending dirty markers so the next full state frame
- *          becomes the new baseline.
- * @param ids A const JsonArray containing the ids.
- */
-void VirtualDevice::setActuatorsIds(const JsonArrayConst &ids)
-{
-    DP_CONTEXT();
-    const std::uint8_t size = static_cast<uint8_t>(ids.size());
-    DPL("↑ Total actuators from JSON: ", size);
-
-    this->totalActuators = size;
+    this->detailsCached = true;
+    this->totalActuators = static_cast<std::uint8_t>(actuatorIds.size());
     this->actuatorsState.reset();
-    this->actuatorIds.clear();
     this->invalidateRuntimeModel();
-
-    for (const JsonVariantConst id_variant : ids)
-    {
-        this->actuatorIds.push_back(id_variant.as<std::uint8_t>());
-    }
+    copyValidatedIds(actuatorIds, this->actuatorIds);
+    copyValidatedIds(buttonIds, this->buttonIds);
 }
 
 namespace
@@ -163,6 +167,40 @@ auto VirtualDevice::getName() const -> const etl::istring &
     return this->name;
 }
 
+auto VirtualDevice::hasCachedDetails() const noexcept -> bool
+{
+    return this->detailsCached;
+}
+
+auto VirtualDevice::populateDetailsDocument(JsonDocument &doc) const -> bool
+{
+    using namespace LSH::protocol;
+
+    if (!this->detailsCached)
+    {
+        return false;
+    }
+
+    doc.clear();
+    doc[KEY_PAYLOAD] = static_cast<std::uint8_t>(Command::DEVICE_DETAILS);
+    doc[KEY_PROTOCOL_MAJOR] = WIRE_PROTOCOL_MAJOR;
+    doc[KEY_NAME] = this->name.c_str();
+
+    JsonArray actuatorIds = doc.createNestedArray(KEY_ACTUATORS_ARRAY);
+    for (const std::uint8_t actuatorId : this->actuatorIds)
+    {
+        actuatorIds.add(actuatorId);
+    }
+
+    JsonArray buttonIds = doc.createNestedArray(KEY_BUTTONS_ARRAY);
+    for (const std::uint8_t buttonId : this->buttonIds)
+    {
+        buttonIds.add(buttonId);
+    }
+
+    return true;
+}
+
 /**
  * @brief Gets the ID of an actuator by its index.
  * @param index The index of the actuator.
@@ -171,6 +209,11 @@ auto VirtualDevice::getName() const -> const etl::istring &
 auto VirtualDevice::getActuatorId(uint8_t index) const -> std::uint8_t
 {
     return this->actuatorIds[index];
+}
+
+auto VirtualDevice::getButtonId(uint8_t index) const -> std::uint8_t
+{
+    return this->buttonIds[index];
 }
 
 auto VirtualDevice::tryGetActuatorIndex(uint8_t actuatorId, std::uint8_t &outIndex) const noexcept -> bool
@@ -193,4 +236,9 @@ auto VirtualDevice::tryGetActuatorIndex(uint8_t actuatorId, std::uint8_t &outInd
 auto VirtualDevice::getTotalActuators() const noexcept -> std::uint8_t
 {
     return this->totalActuators;
+}
+
+auto VirtualDevice::getTotalButtons() const noexcept -> std::uint8_t
+{
+    return static_cast<std::uint8_t>(this->buttonIds.size());
 }
