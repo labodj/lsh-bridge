@@ -1,18 +1,18 @@
 {
   "meta": {
     "name": "LSH Protocol",
-    "specRevision": 2026041201,
+    "specRevision": 2026041601,
     "wireProtocolMajor": 3,
     "notes": "Code-only revision. Never transmitted on wire.",
     "documentation": {
       "trustedEnvironment": "The protocol assumes a trusted environment and a cooperative broker. There is no built-in authentication, integrity or confidentiality layer on the LSH payloads.",
       "handshake": [
-        "`lsh-core` sends `BOOT` after configuration has been finalized.",
         "`BOOT` is a re-sync trigger only. It never carries compatibility metadata.",
-        "When `lsh-bridge` receives `BOOT` from the controller during normal operation, it reboots immediately and rebuilds its cached model through the normal startup handshake.",
-        "When MQTT becomes ready, `lsh-bridge` sends `BOOT` back to the controller to force a fresh `details + state` re-sync.",
-        "After `BOOT`, wire compatibility is checked when the controller sends `DEVICE_DETAILS` with `v = wireProtocolMajor`.",
-        "Topology is treated as static between two controller boots. Runtime hot topology changes are intentionally unsupported."
+        "A peer that receives `BOOT` must discard runtime assumptions derived from the sender and re-synchronize according to the active transport/profile.",
+        "After `BOOT`, the authoritative topology snapshot is re-established through `DEVICE_DETAILS`, and the authoritative runtime state snapshot is re-established through `ACTUATORS_STATE`.",
+        "After `BOOT`, wire compatibility is checked when the authoritative peer sends `DEVICE_DETAILS` with `v = wireProtocolMajor`.",
+        "`DEVICE_DETAILS` is the authoritative topology snapshot for the current session.",
+        "Topology is treated as static between two authoritative topology announcements. Runtime hot topology changes are intentionally unsupported."
       ],
       "compatibility": [
         "`DEVICE_DETAILS.v` is the only on-wire compatibility field and is transmitted only during the handshake.",
@@ -24,7 +24,9 @@
         "The logical LSH payload format is transport-agnostic.",
         "JSON over serial is newline-delimited.",
         "MsgPack over serial uses raw MsgPack payload bytes without extra transport framing.",
-        "MQTT carries raw JSON strings or raw MsgPack payload bytes."
+        "MQTT carries raw JSON strings or raw MsgPack payload bytes.",
+        "`PING` is hop-local by default: it probes reachability of the immediate peer on the current transport unless a higher-level profile defines a stronger meaning.",
+        "`BOOT` is role-local by default: it tells the receiving peer to discard runtime assumptions and re-synchronize. Whether it is forwarded across multiple hops is profile-specific, not part of the base wire contract."
       ],
       "constraints": [
         "`i`, `c`, actuator IDs and button IDs are positive 8-bit values. `0` is reserved as a sentinel for missing or invalid fields and must not be used on the wire.",

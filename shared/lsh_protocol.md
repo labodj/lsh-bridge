@@ -3,7 +3,7 @@
 This document is auto-generated from `shared/lsh_protocol.json` by `tools/generate_lsh_protocol.py`.
 Do not edit it manually.
 
-- Spec revision: `2026041201`
+- Spec revision: `2026041601`
 - Wire protocol major: `3`
 - Revision note: Code-only revision. Never transmitted on wire.
 - Wire goal: compact payloads with single-character keys and numeric command IDs
@@ -14,12 +14,12 @@ The protocol assumes a trusted environment and a cooperative broker. There is no
 
 ## Handshake Contract
 
-- `lsh-core` sends `BOOT` after configuration has been finalized.
 - `BOOT` is a re-sync trigger only. It never carries compatibility metadata.
-- When `lsh-bridge` receives `BOOT` from the controller during normal operation, it reboots immediately and rebuilds its cached model through the normal startup handshake.
-- When MQTT becomes ready, `lsh-bridge` sends `BOOT` back to the controller to force a fresh `details + state` re-sync.
-- After `BOOT`, wire compatibility is checked when the controller sends `DEVICE_DETAILS` with `v = wireProtocolMajor`.
-- Topology is treated as static between two controller boots. Runtime hot topology changes are intentionally unsupported.
+- A peer that receives `BOOT` must discard runtime assumptions derived from the sender and re-synchronize according to the active transport/profile.
+- After `BOOT`, the authoritative topology snapshot is re-established through `DEVICE_DETAILS`, and the authoritative runtime state snapshot is re-established through `ACTUATORS_STATE`.
+- After `BOOT`, wire compatibility is checked when the authoritative peer sends `DEVICE_DETAILS` with `v = wireProtocolMajor`.
+- `DEVICE_DETAILS` is the authoritative topology snapshot for the current session.
+- Topology is treated as static between two authoritative topology announcements. Runtime hot topology changes are intentionally unsupported.
 
 ## Compatibility Contract
 
@@ -34,6 +34,8 @@ The protocol assumes a trusted environment and a cooperative broker. There is no
 - JSON over serial is newline-delimited.
 - MsgPack over serial uses raw MsgPack payload bytes without extra transport framing.
 - MQTT carries raw JSON strings or raw MsgPack payload bytes.
+- `PING` is hop-local by default: it probes reachability of the immediate peer on the current transport unless a higher-level profile defines a stronger meaning.
+- `BOOT` is role-local by default: it tells the receiving peer to discard runtime assumptions and re-synchronize. Whether it is forwarded across multiple hops is profile-specific, not part of the base wire contract.
 
 ## Wire Constraints
 
