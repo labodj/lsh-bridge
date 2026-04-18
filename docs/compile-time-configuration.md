@@ -41,7 +41,7 @@ The bridge now derives topic buffer sizes automatically from the compiled string
 | Macro | Default | What it affects |
 | --- | --- | --- |
 | `CONFIG_HOMIE_FIRMWARE_NAME` | `"lsh-homie"` | Firmware name exposed through Homie. |
-| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.0.2"` | Firmware version exposed through Homie. |
+| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.1.0"` | Firmware version exposed through Homie. |
 | `CONFIG_HOMIE_BRAND` | `"LaboSmartHome"` | Homie brand string exposed by the bridge. |
 
 These macros must expand to string literals. `homie-esp8266` builds its
@@ -145,7 +145,7 @@ build_flags =
     -D CONFIG_MQTT_TOPIC_MISC=\"misc\"
     -D CONFIG_MQTT_TOPIC_SERVICE=\"LSH/Node-RED/SRV\"
     -D CONFIG_HOMIE_FIRMWARE_NAME=\"lsh-homie\"
-    -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.0.2\"
+    -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.1.0\"
     -D CONFIG_HOMIE_BRAND=\"LaboSmartHome\"
     -D CONFIG_PING_INTERVAL_CONTROLLINO_MS=10000U
     -D CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS=10200U
