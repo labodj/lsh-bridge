@@ -1,0 +1,3 @@
+# Vendored subtrees are maintained from their source repositories and must not
+# be reformatted locally inside lsh-bridge.
+vendor/**

@@ -1,0 +1,85 @@
+---
+# Shared formatting policy for lsh-bridge.
+# Goals:
+# - maximize readability for long-lived embedded code
+# - preserve intentional comments and manual include ordering
+# - keep the visual style aligned with lsh-core
+
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: Latest
+
+UseTab: Never
+IndentWidth: 4
+TabWidth: 4
+ContinuationIndentWidth: 4
+
+ColumnLimit: 140
+MaxEmptyLinesToKeep: 1
+ReflowComments: false
+BreakStringLiterals: false
+
+DerivePointerAlignment: false
+PointerAlignment: Right
+ReferenceAlignment: Pointer
+
+AlignTrailingComments: false
+AlignEscapedNewlines: Left
+SpacesBeforeTrailingComments: 2
+IndentCaseLabels: false
+IndentPPDirectives: None
+PPIndentWidth: 4
+
+NamespaceIndentation: None
+CompactNamespaces: false
+FixNamespaceComments: true
+
+IndentAccessModifiers: false
+AccessModifierOffset: -4
+
+SortIncludes: Never
+IncludeBlocks: Preserve
+SortUsingDeclarations: Never
+
+BinPackArguments: true
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: false
+
+AllowShortFunctionsOnASingleLine: None
+AllowShortBlocksOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+InsertBraces: false
+
+SeparateDefinitionBlocks: Leave
+BreakConstructorInitializers: AfterColon
+ConstructorInitializerIndentWidth: 4
+
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: true
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+AlwaysBreakTemplateDeclarations: MultiLine
+
+AttributeMacros:
+  - LSH_OPTIONAL_CONSTEXPR_CTOR
+StatementAttributeLikeMacros:
+  - emit
+...
