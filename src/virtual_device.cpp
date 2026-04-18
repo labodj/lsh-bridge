@@ -1,23 +1,48 @@
-#include "virtualdevice.hpp"
+/**
+ * @file    virtual_device.cpp
+ * @author  Jacopo Labardi (labodj)
+ * @brief   Implements the cached bridge-side controller model.
+ *
+ * Copyright 2026 Jacopo Labardi
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-#include "constants/configs/vdev.hpp"
-#include "constants/communicationprotocol.hpp"
+#include "virtual_device.hpp"
+
+#include "constants/communication_protocol.hpp"
+#include "constants/configs/virtual_device.hpp"
 #include "debug/debug.hpp"
 
 namespace
 {
-    template <std::size_t Capacity>
-    void copyValidatedIds(const JsonArrayConst &source,
-                          etl::vector<std::uint8_t, Capacity> &target)
+template <std::size_t Capacity> void copyValidatedIds(const JsonArrayConst &source, etl::vector<std::uint8_t, Capacity> &target)
+{
+    target.clear();
+    for (const JsonVariantConst idVariant : source)
     {
-        target.clear();
-        for (const JsonVariantConst idVariant : source)
-        {
-            target.push_back(idVariant.as<std::uint8_t>());
-        }
+        target.push_back(idVariant.as<std::uint8_t>());
     }
+}
 
-} // namespace
+/**
+ * @brief Lookup table for bit masks (8-bit).
+ * @details - On AVR: Essential, avoids expensive O(i) shift operations (no barrel shifter)
+ *          - On Xtensa/RISC-V (ESP32): Optional, but kept for code consistency
+ *            ESP32 has barrel shifter so `1 << i` is also O(1)
+ */
+constexpr std::uint8_t BIT_MASK_8[8] = {0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U};
+}  // namespace
 
 /**
  * @brief Caches the validated bootstrap topology snapshot.
@@ -26,9 +51,7 @@ namespace
  *          authoritative state frame must become the new baseline for that
  *          topology.
  */
-void VirtualDevice::setDetails(const char *const deviceName,
-                               const JsonArrayConst &actuatorIds,
-                               const JsonArrayConst &buttonIds)
+void VirtualDevice::setDetails(const char *const deviceName, const JsonArrayConst &actuatorIds, const JsonArrayConst &buttonIds)
 {
     DP_CONTEXT();
     DPL("↑ Name: ", deviceName);
@@ -44,18 +67,6 @@ void VirtualDevice::setDetails(const char *const deviceName,
     copyValidatedIds(buttonIds, this->buttonIds);
 }
 
-namespace
-{
-    /**
-     * @brief Lookup table for bit masks (8-bit).
-     * @details - On AVR: Essential, avoids expensive O(i) shift operations (no barrel shifter)
-     *          - On Xtensa/RISC-V (ESP32): Optional, but kept for code consistency
-     *            ESP32 has barrel shifter so `1 << i` is also O(1)
-     */
-    constexpr uint8_t BIT_MASK_8[8] = {
-        0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
-} // anonymous namespace
-
 /**
  * @brief Updates the state of all actuators from a bitpacked byte array.
  * @details The bridge keeps a compact authoritative bitset plus a cumulative
@@ -69,7 +80,7 @@ void VirtualDevice::setStateFromPackedBytes(const JsonArrayConst &packedBytes)
 {
     DP_CONTEXT();
     // Build new state from packed bytes using optimized loop
-    etl::bitset<constants::vDev::MAX_ACTUATORS> newState;
+    etl::bitset<constants::virtualDevice::MAX_ACTUATORS> newState;
 
     const std::uint8_t numBytes = static_cast<std::uint8_t>(packedBytes.size());
     std::uint8_t actuatorIndex = 0U;
@@ -89,7 +100,7 @@ void VirtualDevice::setStateFromPackedBytes(const JsonArrayConst &packedBytes)
         }
     }
 
-    const etl::bitset<constants::vDev::MAX_ACTUATORS> changedBits = this->actuatorsState ^ newState;
+    const etl::bitset<constants::virtualDevice::MAX_ACTUATORS> changedBits = this->actuatorsState ^ newState;
     this->actuatorsState = newState;
     this->dirtyActuators |= changedBits;
 
@@ -111,54 +122,6 @@ void VirtualDevice::invalidateRuntimeModel() noexcept
 }
 
 /**
- * @brief Gets the state of a single actuator by its index.
- * @param index The index of the actuator.
- * @return The boolean state of the actuator. Returns false if the index is out of bounds.
- */
-auto VirtualDevice::getStateByIndex(uint8_t index) const noexcept -> bool
-{
-    if (index >= this->totalActuators)
-    {
-        return false;
-    }
-    return this->actuatorsState[index];
-}
-
-/**
- * @brief Returns whether an actuator still needs a Homie state refresh.
- */
-auto VirtualDevice::isActuatorDirty(uint8_t index) const noexcept -> bool
-{
-    return index < this->totalActuators && this->dirtyActuators.test(index);
-}
-
-/**
- * @brief Clears the accumulated dirty-actuator set after a successful Homie refresh window.
- */
-void VirtualDevice::clearDirtyActuators() noexcept
-{
-    this->dirtyActuators.reset();
-}
-
-/**
- * @brief Returns whether the cached device model is synchronized with the controller.
- */
-auto VirtualDevice::isRuntimeSynchronized() const noexcept -> bool
-{
-    return this->runtimeSynchronized;
-}
-
-/**
- * @brief Returns and clears the one-shot flag that requests a full Homie state publish.
- */
-auto VirtualDevice::consumeFullStatePublishPending() noexcept -> bool
-{
-    const bool pending = this->fullStatePublishPending;
-    this->fullStatePublishPending = false;
-    return pending;
-}
-
-/**
  * @brief Gets the device name.
  * @return A const reference to the device name string.
  */
@@ -167,14 +130,27 @@ auto VirtualDevice::getName() const -> const etl::istring &
     return this->name;
 }
 
+/**
+ * @brief Returns whether the bridge already cached a validated details payload.
+ *
+ * @return true if cached details are available.
+ * @return false if the topology snapshot is still missing.
+ */
 auto VirtualDevice::hasCachedDetails() const noexcept -> bool
 {
     return this->detailsCached;
 }
 
+/**
+ * @brief Build a DEVICE_DETAILS document from the cached topology snapshot.
+ *
+ * @param doc document to populate.
+ * @return true if the document has been populated.
+ * @return false if cached details are not available yet.
+ */
 auto VirtualDevice::populateDetailsDocument(JsonDocument &doc) const -> bool
 {
-    using namespace LSH::protocol;
+    using namespace lsh::bridge::protocol;
 
     if (!this->detailsCached)
     {
@@ -204,19 +180,22 @@ auto VirtualDevice::populateDetailsDocument(JsonDocument &doc) const -> bool
 /**
  * @brief Gets the ID of an actuator by its index.
  * @param index The index of the actuator.
- * @return A const reference to the actuator's ID string.
+ * @return The numeric actuator ID.
  */
-auto VirtualDevice::getActuatorId(uint8_t index) const -> std::uint8_t
+auto VirtualDevice::getActuatorId(std::uint8_t index) const -> std::uint8_t
 {
     return this->actuatorIds[index];
 }
 
-auto VirtualDevice::getButtonId(uint8_t index) const -> std::uint8_t
-{
-    return this->buttonIds[index];
-}
-
-auto VirtualDevice::tryGetActuatorIndex(uint8_t actuatorId, std::uint8_t &outIndex) const noexcept -> bool
+/**
+ * @brief Resolve one actuator index from its logical wire ID.
+ *
+ * @param actuatorId logical actuator ID.
+ * @param outIndex resolved array index.
+ * @return true if the actuator exists.
+ * @return false if the actuator is not part of the cached topology.
+ */
+auto VirtualDevice::tryGetActuatorIndex(std::uint8_t actuatorId, std::uint8_t &outIndex) const noexcept -> bool
 {
     for (std::uint8_t index = 0U; index < this->totalActuators; ++index)
     {
@@ -226,6 +205,7 @@ auto VirtualDevice::tryGetActuatorIndex(uint8_t actuatorId, std::uint8_t &outInd
             return true;
         }
     }
+
     return false;
 }
 
@@ -238,7 +218,59 @@ auto VirtualDevice::getTotalActuators() const noexcept -> std::uint8_t
     return this->totalActuators;
 }
 
+/**
+ * @brief Gets the total number of configured buttons.
+ * @return The total count of buttons.
+ */
 auto VirtualDevice::getTotalButtons() const noexcept -> std::uint8_t
 {
     return static_cast<std::uint8_t>(this->buttonIds.size());
+}
+
+/**
+ * @brief Gets the state of a single actuator by its index.
+ * @param index The index of the actuator.
+ * @return The boolean state of the actuator. Returns false if the index is out of bounds.
+ */
+auto VirtualDevice::getStateByIndex(std::uint8_t index) const noexcept -> bool
+{
+    if (index >= this->totalActuators)
+    {
+        return false;
+    }
+    return this->actuatorsState[index];
+}
+
+/**
+ * @brief Returns whether an actuator still needs a Homie state refresh.
+ */
+auto VirtualDevice::isActuatorDirty(std::uint8_t index) const noexcept -> bool
+{
+    return index < this->totalActuators && this->dirtyActuators.test(index);
+}
+
+/**
+ * @brief Clears the accumulated dirty-actuator set after a successful Homie refresh window.
+ */
+void VirtualDevice::clearDirtyActuators() noexcept
+{
+    this->dirtyActuators.reset();
+}
+
+/**
+ * @brief Returns whether the cached device model is synchronized with the controller.
+ */
+auto VirtualDevice::isRuntimeSynchronized() const noexcept -> bool
+{
+    return this->runtimeSynchronized;
+}
+
+/**
+ * @brief Returns and clears the one-shot flag that requests a full Homie state publish.
+ */
+auto VirtualDevice::consumeFullStatePublishPending() noexcept -> bool
+{
+    const bool pending = this->fullStatePublishPending;
+    this->fullStatePublishPending = false;
+    return pending;
 }

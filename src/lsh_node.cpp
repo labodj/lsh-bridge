@@ -1,12 +1,32 @@
-#include "lshnode.hpp"
+/**
+ * @file    lsh_node.cpp
+ * @author  Jacopo Labardi (labodj)
+ * @brief   Implements the Homie node wrapper used for one cached controller
+ * actuator.
+ *
+ * Copyright 2026 Jacopo Labardi
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "lsh_node.hpp"
 
 #include <Homie.h>
 
-#include "communication/ardcom.hpp"
+#include "communication/controller_serial_link.hpp"
 #include "constants/homie.hpp"
-#include "debug/debug.hpp"
 #include "utils/conversions.hpp"
-#include "virtualdevice.hpp"
+#include "virtual_device.hpp"
 
 /**
  * @brief Callback for MQTT messages received on the '/set' topic for this node.
@@ -19,7 +39,7 @@
  *         propagated to other handlers. Returning false would pass it to the
  *         global handler.
  */
-auto LSHNode::callBack(const HomieRange &range, const String &value) -> bool
+auto LSHNode::handleSetCommand(const HomieRange &range, const String &value) -> bool
 {
     DP_CONTEXT();
     DPL("↑ ID: ", this->actuatorId, " | value: ", value.c_str());
@@ -31,7 +51,7 @@ auto LSHNode::callBack(const HomieRange &range, const String &value) -> bool
     // The bridge only stages Homie-originated actuator intent when its cached model is authoritative.
     // During re-sync Homie writes are ignored until a fresh controller state frame re-establishes
     // the baseline; raw LSH writes are handled separately by the MQTT input path.
-    if (!this->vDev.isRuntimeSynchronized())
+    if (!this->virtualDevice.isRuntimeSynchronized())
     {
         DPL("Bridge model is waiting for a fresh state sync. Ignoring command.");
         return true;
@@ -43,8 +63,8 @@ auto LSHNode::callBack(const HomieRange &range, const String &value) -> bool
         return true;
     }
 
-    const bool newState = (value == BOOL_TRUE_LITERAL); // New state
-    if (!this->com.stageSingleActuatorCommand(this->actuatorId, newState))
+    const bool newState = (value == BOOL_TRUE_LITERAL);  // New state
+    if (!this->controllerSerialLink.stageSingleActuatorCommand(this->actuatorId, newState))
     {
         DPL("Failed to stage desired actuator state for this Homie node.");
         return true;
@@ -64,7 +84,7 @@ void LSHNode::sendState() const
     DP_CONTEXT();
     DP("↑ ID: ", this->getId());
 
-    const bool stateToSend = this->vDev.getStateByIndex(this->actuatorIndex);
+    const bool stateToSend = this->virtualDevice.getStateByIndex(this->actuatorIndex);
     DPL(" | state: ", stateToSend);
 
     using constants::homie::HOMIE_PROPERTY_ADVERTISE;

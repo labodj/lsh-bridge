@@ -1,7 +1,7 @@
 /**
- * @file    main.cpp
+ * @file    time_keeper.cpp
  * @author  Jacopo Labardi (labodj)
- * @brief   Minimal Arduino entry point for the basic Homie bridge example.
+ * @brief   Defines the cached bridge runtime timestamp storage.
  *
  * Copyright 2026 Jacopo Labardi
  *
@@ -18,31 +18,8 @@
  * limitations under the License.
  */
 
-#include <Arduino.h>
+#include "utils/time_keeper.hpp"
 
-#include <lsh_bridge.hpp>
+#include <cstdint>
 
-namespace
-{
-
-lsh::bridge::BridgeOptions makeBridgeOptions()
-{
-    lsh::bridge::BridgeOptions options;
-    options.serial = &Serial2;
-    options.disableLedFeedback = true;
-    return options;
-}
-
-lsh::bridge::LSHBridge bridge(makeBridgeOptions());
-
-}  // namespace
-
-void setup()
-{
-    bridge.begin();
-}
-
-void loop()
-{
-    bridge.loop();
-}
+std::uint32_t timeKeeper::now = 0U;

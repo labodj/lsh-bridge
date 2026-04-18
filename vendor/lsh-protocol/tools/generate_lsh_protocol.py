@@ -543,7 +543,13 @@ def protocol_key_description(key_name: str) -> str:
     return descriptions.get(key_name, "")
 
 
-def render_cpp_protocol(spec: ProtocolSpec, header_guard: str, cpp_namespace: str) -> str:
+def render_cpp_protocol(
+    spec: ProtocolSpec,
+    header_guard: str,
+    cpp_namespace: str,
+    *,
+    file_name: str,
+) -> str:
     """Render the shared command/key header used by C++ targets."""
 
     key_lines = "\n".join(
@@ -559,9 +565,24 @@ def render_cpp_protocol(spec: ProtocolSpec, header_guard: str, cpp_namespace: st
     )
 
     return f"""/**
- * @file Auto-generated from shared/lsh_protocol.json.
+ * @file    {file_name}
+ * @author  Jacopo Labardi (labodj)
  * @brief Defines the communication protocol contract (JSON keys and command IDs).
  * @note Do not edit manually. Run tools/generate_lsh_protocol.py instead.
+ *
+ * Copyright 2026 Jacopo Labardi
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #ifndef {header_guard}
@@ -609,6 +630,7 @@ def render_cpp_static_payloads(
     header_guard: str,
     include_directive: str,
     array_type: str,
+    file_name: str,
 ) -> str:
     """Render a target-specific header with pre-serialized static payload bytes."""
 
@@ -635,9 +657,24 @@ def render_cpp_static_payloads(
     joined_payloads = "\n\n".join(payload_lines)
 
     return f"""/**
- * @file Auto-generated from shared/lsh_protocol.json.
+ * @file    {file_name}
+ * @author  Jacopo Labardi (labodj)
  * @brief Defines target-specific pre-serialized static payload bytes.
  * @note Do not edit manually. Run tools/generate_lsh_protocol.py instead.
+ *
+ * Copyright 2026 Jacopo Labardi
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #ifndef {header_guard}
@@ -875,6 +912,7 @@ def generated_outputs(
                             spec,
                             "LSH_CORE_COMMUNICATION_CONSTANTS_PROTOCOL_HPP",
                             "lsh::core",
+                            file_name="protocol.hpp",
                         ),
                     ),
                     (
@@ -885,6 +923,7 @@ def generated_outputs(
                             header_guard="LSH_CORE_COMMUNICATION_CONSTANTS_STATIC_PAYLOADS_HPP",
                             include_directive='#include "../../internal/etl_array.hpp"',
                             array_type="etl::array",
+                            file_name="static_payloads.hpp",
                         ),
                     ),
                 ]
@@ -902,6 +941,7 @@ def generated_outputs(
                             spec,
                             "LSH_BRIDGE_CONSTANTS_COMMUNICATION_PROTOCOL_HPP",
                             "lsh::bridge",
+                            file_name="communication_protocol.hpp",
                         ),
                     ),
                     (
@@ -912,6 +952,7 @@ def generated_outputs(
                             header_guard="LSH_BRIDGE_CONSTANTS_PAYLOADS_HPP",
                             include_directive="#include <array>",
                             array_type="std::array",
+                            file_name="payloads.hpp",
                         ),
                     ),
                 ]

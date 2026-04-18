@@ -1,7 +1,7 @@
 /**
- * @file    main.cpp
+ * @file    button_click_types.hpp
  * @author  Jacopo Labardi (labodj)
- * @brief   Minimal Arduino entry point for the basic Homie bridge example.
+ * @brief   Defines the click types used by bridge-side button-related payloads.
  *
  * Copyright 2026 Jacopo Labardi
  *
@@ -18,31 +18,24 @@
  * limitations under the License.
  */
 
-#include <Arduino.h>
+#ifndef LSH_BRIDGE_CONSTANTS_BUTTON_CLICK_TYPES_HPP
+#define LSH_BRIDGE_CONSTANTS_BUTTON_CLICK_TYPES_HPP
 
-#include <lsh_bridge.hpp>
-
-namespace
+/**
+ * @brief Namespace for constants.
+ */
+namespace constants
 {
-
-lsh::bridge::BridgeOptions makeBridgeOptions()
+/**
+ * @brief Click types.
+ *
+ */
+enum class ButtonClickType
 {
-    lsh::bridge::BridgeOptions options;
-    options.serial = &Serial2;
-    options.disableLedFeedback = true;
-    return options;
-}
+    SHORT,      //!< Short click
+    LONG,       //!< Long click
+    SUPER_LONG  //!< Super long click
+};
+}  // namespace constants
 
-lsh::bridge::LSHBridge bridge(makeBridgeOptions());
-
-}  // namespace
-
-void setup()
-{
-    bridge.begin();
-}
-
-void loop()
-{
-    bridge.loop();
-}
+#endif  // LSH_BRIDGE_CONSTANTS_BUTTON_CLICK_TYPES_HPP

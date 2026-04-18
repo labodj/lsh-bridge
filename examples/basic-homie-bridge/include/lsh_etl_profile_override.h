@@ -1,7 +1,10 @@
 /**
- * @file    main.cpp
+ * @file    lsh_etl_profile_override.h
  * @author  Jacopo Labardi (labodj)
- * @brief   Minimal Arduino entry point for the basic Homie bridge example.
+ * @brief   Example project-local ETL override hook for the basic bridge example.
+ * @details This header mirrors the historical `lsh-bridge` ETL policy and
+ *          shows how a consumer project can keep ETL policy decisions local
+ *          without editing the library copy of `etl_profile.h`.
  *
  * Copyright 2026 Jacopo Labardi
  *
@@ -18,31 +21,12 @@
  * limitations under the License.
  */
 
-#include <Arduino.h>
+#pragma once
 
-#include <lsh_bridge.hpp>
+#ifndef ETL_VERBOSE_ERRORS
+#define ETL_VERBOSE_ERRORS
+#endif
 
-namespace
-{
-
-lsh::bridge::BridgeOptions makeBridgeOptions()
-{
-    lsh::bridge::BridgeOptions options;
-    options.serial = &Serial2;
-    options.disableLedFeedback = true;
-    return options;
-}
-
-lsh::bridge::LSHBridge bridge(makeBridgeOptions());
-
-}  // namespace
-
-void setup()
-{
-    bridge.begin();
-}
-
-void loop()
-{
-    bridge.loop();
-}
+#ifndef ETL_CHECK_PUSH_POP
+#define ETL_CHECK_PUSH_POP
+#endif

@@ -24,6 +24,8 @@ At runtime it:
 - creates one Homie node per actuator declared by the controller
 - keeps an authoritative compact LSH state topic in sync
 - coalesces actuator command bursts before writing `SET_STATE` back to the controller
+- drops unstable actuator command storms instead of letting one batch stay open forever
+- publishes bridge-local diagnostics on the MQTT `misc` topic when it detects unstable command streams or inbound queue overflow
 - re-synchronizes the runtime model when MQTT becomes ready again
 - treats MQTT service-topic `PING` as bridge-local reachability only and MQTT service-topic `BOOT` as a bridge-local resync trigger toward the controller
 
@@ -63,11 +65,10 @@ For a system-level view of the installation pattern, see the public landing repo
 The public surface is intentionally small:
 
 ```cpp
-#include <lsh_esp_bridge.hpp>
+#include <lsh_bridge.hpp>
 
-lsh::esp::BridgeOptions options;
-options.identity.setFirmwareVersion("1.0.2");
-lsh::esp::LSHEspBridge bridge(options);
+lsh::bridge::BridgeOptions options;
+lsh::bridge::LSHBridge bridge(options);
 
 void setup() {
   bridge.begin();
@@ -84,12 +85,15 @@ See [examples/basic-homie-bridge/src/main.cpp](./examples/basic-homie-bridge/src
 
 - the library currently assumes a single active bridge instance
 - Homie remains part of the opinionated runtime surface for now
+- runtime command handling and bridge-local diagnostics are documented in
+  [docs/runtime-behavior.md](./docs/runtime-behavior.md)
 - compile-time `CONFIG_*` knobs are still supported and documented in
   [docs/compile-time-configuration.md](./docs/compile-time-configuration.md)
 - the protocol source of truth remains vendored as `vendor/lsh-protocol`
-- firmware identity is stored in bounded ETL strings and validated before use
-  (`firmwareName <= 32`, `firmwareVersion <= 16`, `homieBrand <= 21`)
-- logging now defaults to `AutoFromBuild`, which preserves the original `lsh-esp` behavior:
+- Homie firmware identity is configured at compile time through
+  `CONFIG_HOMIE_FIRMWARE_NAME`, `CONFIG_HOMIE_FIRMWARE_VERSION` and
+  `CONFIG_HOMIE_BRAND`
+- logging now defaults to `AutoFromBuild`, which preserves the original bridge runtime behavior:
   logging is disabled in normal builds and stays enabled when `LSH_DEBUG` is defined
 
 This is not yet a fully generic bridge framework. It is a clean extraction of the current working runtime into a library-shaped repo.
@@ -112,6 +116,10 @@ wiring, MQTT topic naming, liveness timers and codec selection.
 
 The full reference lives in
 [docs/compile-time-configuration.md](./docs/compile-time-configuration.md).
+Runtime-only behaviors such as actuator command coalescing, unstable command
+storm protection, inbound MQTT queue backpressure and bridge-local MQTT
+diagnostics are documented separately in
+[docs/runtime-behavior.md](./docs/runtime-behavior.md).
 The bundled
 [example `platformio.ini`](./examples/basic-homie-bridge/platformio.ini)
 explicitly sets the supported value macros and leaves optional behavior flags
@@ -122,8 +130,15 @@ Current supported knobs:
 - capacities: `CONFIG_MAX_ACTUATORS`, `CONFIG_MAX_BUTTONS`, `CONFIG_MAX_NAME_LENGTH`
 - serial: `CONFIG_ARDCOM_SERIAL_RX_PIN`, `CONFIG_ARDCOM_SERIAL_TX_PIN`, `CONFIG_ARDCOM_SERIAL_BAUD`, `CONFIG_ARDCOM_SERIAL_TIMEOUT_MS`
 - MQTT topics: `CONFIG_MQTT_TOPIC_BASE`, `CONFIG_MQTT_TOPIC_INPUT`, `CONFIG_MQTT_TOPIC_STATE`, `CONFIG_MQTT_TOPIC_CONF`, `CONFIG_MQTT_TOPIC_MISC`, `CONFIG_MQTT_TOPIC_SERVICE`
+- Homie identity: `CONFIG_HOMIE_FIRMWARE_NAME`, `CONFIG_HOMIE_FIRMWARE_VERSION`, `CONFIG_HOMIE_BRAND`
 - liveness: `CONFIG_PING_INTERVAL_CONTROLLINO_MS`, `CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS`
+- runtime policy: `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS`, `CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS`, `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY`, `CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT`
 - codecs and flags: `CONFIG_MSG_PACK_ARDUINO`, `CONFIG_MSG_PACK_MQTT`, `LSH_DEBUG`, `HOMIE_RESET`
+- ETL override hook: `LSH_ETL_PROFILE_OVERRIDE_HEADER`
+
+The bundled example also includes a ready-to-use project-local ETL override
+header at
+[examples/basic-homie-bridge/include/lsh_etl_profile_override.h](./examples/basic-homie-bridge/include/lsh_etl_profile_override.h).
 
 ## Development
 
@@ -132,7 +147,7 @@ The bundled example project lives in [examples/basic-homie-bridge](./examples/ba
 The example exposes two build profiles:
 
 - `release`: conservative and simple, suitable as a library smoke test
-- `release_aggressive`: mirrors the original `lsh-esp` optimization style more closely
+- `release_aggressive`: mirrors the original bridge firmware optimization style more closely
 
 To verify the vendored protocol stays aligned:
 
@@ -162,11 +177,11 @@ the bridge-specific outputs under `src/constants/`.
 
 Inside the library:
 
-- `ArdCom`
+- `ControllerSerialLink`
 - `VirtualDevice`
 - `MqttTopicsBuilder`
 - `LSHNode`
-- `LSHEspBridge`
+- `LSHBridge`
 
 Still intentionally compile-time configured:
 
