@@ -23,7 +23,10 @@ DerivePointerAlignment: false
 PointerAlignment: Right
 ReferenceAlignment: Pointer
 
-AlignTrailingComments: false
+AlignTrailingComments:
+  AlignPPAndNotPP: true
+  Kind: Always
+  OverEmptyLines: 0
 AlignEscapedNewlines: Left
 SpacesBeforeTrailingComments: 2
 IndentCaseLabels: false
