@@ -74,8 +74,8 @@ The protocol assumes a trusted environment and a cooperative broker. There is no
 | 15 | `FAILOVER` | `FAILOVER` | `{"p":15}` | General failover signal. |
 | 16 | `FAILOVER_CLICK` | `FAILOVER_CLICK` | `{"p":16,"c":42,"i":7,"t":2}` | Failover for a specific click with correlation ID. |
 | 17 | `NETWORK_CLICK_CONFIRM` | `NETWORK_CLICK_CONFIRM` | `{"p":17,"c":42,"i":7,"t":1}` | Confirm a network click after ACK using the same correlation ID. |
-| 254 | `SYSTEM_REBOOT` | `SYSTEM_REBOOT` | `{"p":254}` | ESP system reboot command. |
-| 255 | `SYSTEM_RESET` | `SYSTEM_RESET` | `{"p":255}` | ESP system reset command. |
+| 254 | `SYSTEM_REBOOT` | `SYSTEM_REBOOT` | `{"p":254}` | Bridge system reboot command. |
+| 255 | `SYSTEM_RESET` | `SYSTEM_RESET` | `{"p":255}` | Bridge system reset command. |
 
 ## Click Types
 
@@ -92,8 +92,8 @@ shown below are the exact raw bytes emitted on both serial and MQTT transports.
 
 | Name | Command | C++ Enum | C++ Symbol | Targets | JSON Bytes | MsgPack Bytes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `BOOT` | `BOOT` | `BOOT` | `BOOT` | `core`, `esp` | `'{', '"', 'p', '"', ':', '4', '}', '\n'` | `0x81, 0xA1, 0x70, 0x04` |
-| `PING` | `PING` | `PING_` | `PING` | `core`, `esp` | `'{', '"', 'p', '"', ':', '5', '}', '\n'` | `0x81, 0xA1, 0x70, 0x05` |
-| `ASK_DETAILS` | `REQUEST_DETAILS` | `ASK_DETAILS` | `ASK_DETAILS` | `esp` | `'{', '"', 'p', '"', ':', '1', '0', '}', '\n'` | `0x81, 0xA1, 0x70, 0x0A` |
-| `ASK_STATE` | `REQUEST_STATE` | `ASK_STATE` | `ASK_STATE` | `esp` | `'{', '"', 'p', '"', ':', '1', '1', '}', '\n'` | `0x81, 0xA1, 0x70, 0x0B` |
-| `GENERAL_FAILOVER` | `FAILOVER` | `GENERAL_FAILOVER` | `GENERAL_FAILOVER` | `esp` | `'{', '"', 'p', '"', ':', '1', '5', '}', '\n'` | `0x81, 0xA1, 0x70, 0x0F` |
+| `BOOT` | `BOOT` | `BOOT` | `BOOT` | `core`, `bridge` | `'{', '"', 'p', '"', ':', '4', '}', '\n'` | `0x81, 0xA1, 0x70, 0x04` |
+| `PING` | `PING` | `PING_` | `PING` | `core`, `bridge` | `'{', '"', 'p', '"', ':', '5', '}', '\n'` | `0x81, 0xA1, 0x70, 0x05` |
+| `ASK_DETAILS` | `REQUEST_DETAILS` | `ASK_DETAILS` | `ASK_DETAILS` | `bridge` | `'{', '"', 'p', '"', ':', '1', '0', '}', '\n'` | `0x81, 0xA1, 0x70, 0x0A` |
+| `ASK_STATE` | `REQUEST_STATE` | `ASK_STATE` | `ASK_STATE` | `bridge` | `'{', '"', 'p', '"', ':', '1', '1', '}', '\n'` | `0x81, 0xA1, 0x70, 0x0B` |
+| `GENERAL_FAILOVER` | `FAILOVER` | `GENERAL_FAILOVER` | `GENERAL_FAILOVER` | `bridge` | `'{', '"', 'p', '"', ':', '1', '5', '}', '\n'` | `0x81, 0xA1, 0x70, 0x0F` |

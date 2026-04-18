@@ -26,16 +26,14 @@ ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = ROOT / "shared" / "lsh_protocol.json"
 GOLDEN_PAYLOADS_PATH = ROOT / "shared" / "lsh_protocol_golden_payloads.json"
 TARGET_CORE = "core"
-TARGET_ESP = "esp"
-CLI_TARGET_BRIDGE = "bridge"
-VALID_TARGETS = {TARGET_CORE, TARGET_ESP}
+TARGET_BRIDGE = "bridge"
+VALID_TARGETS = {TARGET_CORE, TARGET_BRIDGE}
 CLI_TARGET_SHARED_DOC = "shared-doc"
 CLI_TARGET_NODE_RED = "node-red"
 VALID_CLI_TARGETS = (
     CLI_TARGET_SHARED_DOC,
     TARGET_CORE,
-    TARGET_ESP,
-    CLI_TARGET_BRIDGE,
+    TARGET_BRIDGE,
     CLI_TARGET_NODE_RED,
 )
 CPP_IDENTIFIER_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -545,7 +543,7 @@ def protocol_key_description(key_name: str) -> str:
     return descriptions.get(key_name, "")
 
 
-def render_cpp_protocol(spec: ProtocolSpec, header_guard: str) -> str:
+def render_cpp_protocol(spec: ProtocolSpec, header_guard: str, cpp_namespace: str) -> str:
     """Render the shared command/key header used by C++ targets."""
 
     key_lines = "\n".join(
@@ -571,7 +569,7 @@ def render_cpp_protocol(spec: ProtocolSpec, header_guard: str) -> str:
 
 #include <stdint.h>
 
-namespace LSH
+namespace {cpp_namespace}
 {{
     namespace protocol
     {{
@@ -598,7 +596,7 @@ namespace LSH
         }};
 
     }} // namespace protocol
-}} // namespace LSH
+}} // namespace {cpp_namespace}
 
 #endif // {header_guard}
 """
@@ -848,7 +846,7 @@ def generated_outputs(
     selected_targets: Sequence[str],
     shared_doc_root: Path | None,
     core_root: Path | None,
-    esp_root: Path | None,
+    bridge_root: Path | None,
     node_red_root: Path | None,
 ) -> list[tuple[Path, str]]:
     """Return the generated files requested by the selected targets."""
@@ -873,14 +871,18 @@ def generated_outputs(
                 [
                     (
                         core_root / "src" / "communication" / "constants" / "protocol.hpp",
-                        render_cpp_protocol(spec, "LSHCORE_COMMUNICATION_CONSTANTS_PROTOCOL_HPP"),
+                        render_cpp_protocol(
+                            spec,
+                            "LSH_CORE_COMMUNICATION_CONSTANTS_PROTOCOL_HPP",
+                            "lsh::core",
+                        ),
                     ),
                     (
                         core_root / "src" / "communication" / "constants" / "static_payloads.hpp",
                         render_cpp_static_payloads(
                             spec,
                             target=TARGET_CORE,
-                            header_guard="LSHCORE_COMMUNICATION_CONSTANTS_STATIC_PAYLOADS_HPP",
+                            header_guard="LSH_CORE_COMMUNICATION_CONSTANTS_STATIC_PAYLOADS_HPP",
                             include_directive='#include "../../internal/etl_array.hpp"',
                             array_type="etl::array",
                         ),
@@ -889,23 +891,25 @@ def generated_outputs(
             )
             continue
 
-        if target == TARGET_ESP:
-            if esp_root is None:
-                raise SpecError(
-                    "--bridge-root (legacy --esp-root) is required when target 'bridge'/'esp' is selected."
-                )
+        if target == TARGET_BRIDGE:
+            if bridge_root is None:
+                raise SpecError("--bridge-root is required when target 'bridge' is selected.")
             outputs.extend(
                 [
                     (
-                        esp_root / "src" / "constants" / "communicationprotocol.hpp",
-                        render_cpp_protocol(spec, "LSHESP_CONSTANTS_COMMUNICATIONPROTOCOL_HPP"),
+                        bridge_root / "src" / "constants" / "communication_protocol.hpp",
+                        render_cpp_protocol(
+                            spec,
+                            "LSH_BRIDGE_CONSTANTS_COMMUNICATION_PROTOCOL_HPP",
+                            "lsh::bridge",
+                        ),
                     ),
                     (
-                        esp_root / "src" / "constants" / "payloads.hpp",
+                        bridge_root / "src" / "constants" / "payloads.hpp",
                         render_cpp_static_payloads(
                             spec,
-                            target=TARGET_ESP,
-                            header_guard="LSHESP_CONSTANTS_PAYLOADS_HPP",
+                            target=TARGET_BRIDGE,
+                            header_guard="LSH_BRIDGE_CONSTANTS_PAYLOADS_HPP",
                             include_directive="#include <array>",
                             array_type="std::array",
                         ),
@@ -931,16 +935,15 @@ def generated_outputs(
 
 
 def normalize_cli_targets(selected_targets: Sequence[str]) -> tuple[str, ...]:
-    """Map user-facing aliases to generator targets and remove duplicates."""
+    """Remove duplicate CLI targets while preserving the request order."""
 
     normalized: list[str] = []
     seen: set[str] = set()
 
     for target in selected_targets:
-        mapped = TARGET_ESP if target == CLI_TARGET_BRIDGE else target
-        if mapped not in seen:
-            normalized.append(mapped)
-            seen.add(mapped)
+        if target not in seen:
+            normalized.append(target)
+            seen.add(target)
 
     return tuple(normalized)
 
@@ -951,7 +954,7 @@ def run(
     selected_targets: Sequence[str],
     shared_doc_root: Path | None,
     core_root: Path | None,
-    esp_root: Path | None,
+    bridge_root: Path | None,
     node_red_root: Path | None,
 ) -> int:
     """Generate the files or verify that generated files are already up to date."""
@@ -967,7 +970,7 @@ def run(
         selected_targets=selected_targets,
         shared_doc_root=shared_doc_root,
         core_root=core_root,
-        esp_root=esp_root,
+        bridge_root=bridge_root,
         node_red_root=node_red_root,
     ):
         if check_only:
@@ -1002,7 +1005,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--target",
         action="append",
         choices=VALID_CLI_TARGETS,
-        help="generation target to emit; 'bridge' is the public alias of the legacy 'esp' target",
+        help="generation target to emit",
     )
     parser.add_argument(
         "--check",
@@ -1020,11 +1023,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="root directory of the lsh-core repository",
     )
     parser.add_argument(
-        "--esp-root",
         "--bridge-root",
-        dest="esp_root",
+        dest="bridge_root",
         type=Path,
-        help="root directory of the lsh-bridge repository; legacy --esp-root alias is still supported",
+        help="root directory of the lsh-bridge repository",
     )
     parser.add_argument(
         "--node-red-root",
@@ -1045,7 +1047,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             selected_targets=selected_targets,
             shared_doc_root=args.shared_doc_root.resolve() if args.shared_doc_root else None,
             core_root=args.core_root.resolve() if args.core_root else None,
-            esp_root=args.esp_root.resolve() if args.esp_root else None,
+            bridge_root=args.bridge_root.resolve() if args.bridge_root else None,
             node_red_root=args.node_red_root.resolve() if args.node_red_root else None,
         )
     except SpecError as exc:
