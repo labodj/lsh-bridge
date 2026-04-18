@@ -116,12 +116,12 @@
     {
       "name": "SYSTEM_REBOOT",
       "value": 254,
-      "description": "ESP system reboot command."
+      "description": "Bridge system reboot command."
     },
     {
       "name": "SYSTEM_RESET",
       "value": 255,
-      "description": "ESP system reset command."
+      "description": "Bridge system reset command."
     }
   ],
   "clickTypes": [
@@ -146,28 +146,28 @@
     {
       "name": "BOOT",
       "command": "BOOT",
-      "targets": ["core", "esp"]
+      "targets": ["core", "bridge"]
     },
     {
       "name": "PING",
       "cppName": "PING_",
       "command": "PING",
-      "targets": ["core", "esp"]
+      "targets": ["core", "bridge"]
     },
     {
       "name": "ASK_DETAILS",
       "command": "REQUEST_DETAILS",
-      "targets": ["esp"]
+      "targets": ["bridge"]
     },
     {
       "name": "ASK_STATE",
       "command": "REQUEST_STATE",
-      "targets": ["esp"]
+      "targets": ["bridge"]
     },
     {
       "name": "GENERAL_FAILOVER",
       "command": "FAILOVER",
-      "targets": ["esp"]
+      "targets": ["bridge"]
     }
   ]
 }
