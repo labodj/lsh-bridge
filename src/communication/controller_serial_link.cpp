@@ -997,7 +997,6 @@ auto ControllerSerialLink::triggerFailoverFromReceivedClick() -> constants::Dese
  */
 auto ControllerSerialLink::isConnected() const -> bool
 {
-    DP_CONTEXT();
     using constants::ping::CONNECTION_TIMEOUT_CONTROLLINO_MS;
     return ((timeKeeper::getTime() - this->lastReceivedPayloadTime_ms) < CONNECTION_TIMEOUT_CONTROLLINO_MS);
 }

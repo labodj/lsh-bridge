@@ -41,6 +41,7 @@
 #include "constants/configs/virtual_device.hpp"
 #include "constants/deserialize_exit_codes.hpp"
 #include "constants/payloads.hpp"
+#include "debug/debug.hpp"
 #include "lsh_node.hpp"
 #include "utils/time_keeper.hpp"
 #include "virtual_device.hpp"
@@ -153,6 +154,16 @@ namespace lsh::bridge
 class LSHBridge::Impl
 {
 public:
+    /**
+     * @brief Outcome of the bridge-side semantic handling for one MQTT command.
+     */
+    enum class TypedCommandResult : std::uint8_t
+    {
+        Handled,      //!< The bridge accepted and handled the command.
+        Unsupported,  //!< The bridge does not interpret this command type.
+        Invalid       //!< The command type is known, but this concrete payload is invalid.
+    };
+
     /**
      * @brief Distinguishes the MQTT topic family that produced an inbound
      * payload.
@@ -887,7 +898,7 @@ public:
      *          runtime remains compatible with legacy or future controller
      * commands.
      */
-    [[nodiscard]] auto forwardTypedControllerCommand(const JsonDocument &commandDocument) -> bool
+    [[nodiscard]] auto forwardTypedControllerCommand(const JsonDocument &commandDocument) -> TypedCommandResult
     {
         using namespace lsh::bridge::protocol;
 
@@ -906,7 +917,7 @@ public:
             {
                 (void)publishCachedDetails();
             }
-            return true;
+            return TypedCommandResult::Handled;
 
         case Command::REQUEST_STATE:
             // Prefer the local cache only when it is known to mirror a controller-
@@ -915,11 +926,11 @@ public:
             {
                 requestAuthoritativeStateRefresh();
             }
-            return true;
+            return TypedCommandResult::Handled;
 
         case Command::FAILOVER:
             controllerSerialLink.sendJson(constants::payloads::StaticType::GENERAL_FAILOVER);
-            return true;
+            return TypedCommandResult::Handled;
 
         case Command::SET_SINGLE_ACTUATOR:
         {
@@ -927,14 +938,17 @@ public:
             bool requestedState = false;
             if (!tryGetUint8Scalar(commandDocument[KEY_ID], actuatorId) || !tryGetBinaryState(commandDocument[KEY_STATE], requestedState))
             {
-                return false;
+                return TypedCommandResult::Invalid;
             }
 
-            return controllerSerialLink.stageSingleActuatorCommand(actuatorId, requestedState);
+            return controllerSerialLink.stageSingleActuatorCommand(actuatorId, requestedState) ? TypedCommandResult::Handled
+                                                                                               : TypedCommandResult::Invalid;
         }
 
         case Command::SET_STATE:
-            return controllerSerialLink.stageDesiredPackedState(commandDocument[KEY_STATE].as<JsonArrayConst>());
+            return controllerSerialLink.stageDesiredPackedState(commandDocument[KEY_STATE].as<JsonArrayConst>())
+                       ? TypedCommandResult::Handled
+                       : TypedCommandResult::Invalid;
 
         case Command::NETWORK_CLICK_ACK:
         case Command::FAILOVER_CLICK:
@@ -950,7 +964,7 @@ public:
             if (!tryGetUint8Scalar(commandDocument[KEY_TYPE], clickType) || !tryGetUint8Scalar(commandDocument[KEY_ID], clickableId) ||
                 !tryGetUint8Scalar(commandDocument[KEY_CORRELATION_ID], correlationId))
             {
-                return false;
+                return TypedCommandResult::Invalid;
             }
 
             serialDoc[KEY_PAYLOAD] = static_cast<std::uint8_t>(command);
@@ -958,11 +972,11 @@ public:
             serialDoc[KEY_ID] = clickableId;
             serialDoc[KEY_CORRELATION_ID] = correlationId;
             controllerSerialLink.sendJson(serialDoc);
-            return true;
+            return TypedCommandResult::Handled;
         }
 
         default:
-            return false;
+            return TypedCommandResult::Unsupported;
         }
     }
 
@@ -1017,7 +1031,21 @@ public:
             break;
         }
 
-        if (!forwardTypedControllerCommand(commandDocument))
+        const auto typedCommandResult = forwardTypedControllerCommand(commandDocument);
+        if (typedCommandResult == TypedCommandResult::Handled)
+        {
+            return;
+        }
+
+        if (typedCommandResult == TypedCommandResult::Invalid)
+        {
+            DPL("Dropping invalid MQTT command for a bridge-known payload type. "
+                "The bridge recognized the command ID but rejected this specific "
+                "payload instead of raw-forwarding it to the controller.");
+            return;
+        }
+
+        if (typedCommandResult == TypedCommandResult::Unsupported)
         {
             forwardOrTranslateToController(payload, payloadLength, commandDocument);
         }
@@ -1198,6 +1226,11 @@ void LSHBridge::begin()
     {
         return;
     }
+
+    // Open the USB serial console before any debug log can fire. Without this
+    // explicit initialization a debug build compiles the logging calls but
+    // still stays silent on the bridge USB port.
+    DSB();
 
     activeInstance = this;
     timeKeeper::update();
