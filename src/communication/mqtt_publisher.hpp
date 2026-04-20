@@ -27,19 +27,15 @@
 
 #include "constants/payloads.hpp"
 
-class AsyncMqttClient;  //!< FORWARD DECLARATION
+class AsyncMqttClient;  //!< Forward declaration of the AsyncMqttClient owned by Homie.
 
-/**
- * @brief Publishes bridge payloads through the active MQTT client.
- *
- */
 namespace MqttPublisher
 {
-void setMqttClient(AsyncMqttClient *client);  // Set MQTT client
+void setMqttClient(AsyncMqttClient *client);
 
-[[nodiscard]] auto sendJson(const JsonDocument &jsonDoc, const char *topic, bool retain, std::uint8_t qos) -> bool;  // Send a json
+[[nodiscard]] auto sendJson(const JsonDocument &jsonDoc, const char *topic, bool retain, std::uint8_t qos) -> bool;
 
-[[nodiscard]] auto sendJson(constants::payloads::StaticType payloadType) -> bool;  // Send a static Json, use default topic
+[[nodiscard]] auto sendJson(constants::payloads::StaticType payloadType) -> bool;
 }  // namespace MqttPublisher
 
 #endif  // LSH_BRIDGE_COMMUNICATION_MQTT_PUBLISHER_HPP

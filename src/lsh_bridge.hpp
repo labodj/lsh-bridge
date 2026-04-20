@@ -26,8 +26,8 @@
 #include <memory>
 
 class HardwareSerial;
-struct HomieEvent;                        //!< FORWARD DECLARATION
-struct AsyncMqttClientMessageProperties;  //!< FORWARD DECLARATION
+struct HomieEvent;                        //!< Forward declaration of the Homie event payload.
+struct AsyncMqttClientMessageProperties;  //!< Forward declaration of the AsyncMqttClient message metadata.
 
 namespace lsh::bridge
 {
@@ -37,9 +37,9 @@ namespace lsh::bridge
  */
 enum class LoggingMode : std::uint8_t
 {
-    AutoFromBuild,  //!< Enable logs only when the build configuration enables them.
-    Enabled,        //!< Force runtime logging on.
-    Disabled        //!< Force runtime logging off.
+    AutoFromBuild,  // Enable logs only when the build configuration enables them.
+    Enabled,        // Force runtime logging on.
+    Disabled        // Force runtime logging off.
 };
 
 /**
@@ -54,42 +54,39 @@ struct BridgeOptions
 
 /**
  * @brief Opinionated single-instance runtime bridge between LSH serial and Homie/MQTT.
- * @details The bridge preserves the current bridge runtime behavior while
- *          hiding the legacy internal types behind a small facade. The
- *          controller remains the authoritative source of topology and state.
  */
 class LSHBridge
 {
 public:
-    explicit LSHBridge(BridgeOptions options = {});  // Construct a new bridge object
+    explicit LSHBridge(BridgeOptions options = {});
 
-    ~LSHBridge();  // Destroy the bridge object
+    ~LSHBridge();
 
     LSHBridge(const LSHBridge &) = delete;
     auto operator=(const LSHBridge &) -> LSHBridge & = delete;
     LSHBridge(LSHBridge &&) = delete;
     auto operator=(LSHBridge &&) -> LSHBridge & = delete;
 
-    void begin();  // Initialize serial transport, bootstrap the controller model and start Homie
+    void begin();
 
-    void loop();  // Execute one bridge main-loop iteration
+    void loop();
 
-    [[nodiscard]] auto isRuntimeSynchronized() const noexcept -> bool;  // Return whether runtime state is synchronized
+    [[nodiscard]] auto isRuntimeSynchronized() const noexcept -> bool;
 
-    [[nodiscard]] auto deviceName() const noexcept -> const char *;  // Return cached controller device name
+    [[nodiscard]] auto deviceName() const noexcept -> const char *;
 
 private:
-    class Impl;                            //!< FORWARD DECLARATION
+    class Impl;                            //!< Forward declaration of the hidden runtime implementation.
     std::unique_ptr<Impl> implementation;  //!< PIMPL used to keep the public facade small.
 
-    static LSHBridge *activeInstance;                         //!< Currently active bridge instance used by static callbacks.
-    static void onHomieEventStatic(const HomieEvent &event);  //!< Static trampoline for Homie callbacks
+    static LSHBridge *activeInstance;
+    static void onHomieEventStatic(const HomieEvent &event);
     static void onMqttMessageStatic(char *topic,
                                     char *payload,
                                     AsyncMqttClientMessageProperties properties,
                                     std::size_t len,
                                     std::size_t index,
-                                    std::size_t total);  //!< Static trampoline for AsyncMqttClient callbacks
+                                    std::size_t total);
 };
 
 }  // namespace lsh::bridge

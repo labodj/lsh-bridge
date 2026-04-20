@@ -1,7 +1,7 @@
 /**
- * @file    time_keeper.cpp
+ * @file    details_cache_store.hpp
  * @author  Jacopo Labardi (labodj)
- * @brief   Defines the cached bridge runtime timestamp storage.
+ * @brief   Declares the small NVS-backed cache used to persist controller topology details across bridge reboots.
  *
  * Copyright 2026 Jacopo Labardi
  *
@@ -18,11 +18,18 @@
  * limitations under the License.
  */
 
-#include "utils/time_keeper.hpp"
+#ifndef LSH_BRIDGE_DETAILS_CACHE_STORE_HPP
+#define LSH_BRIDGE_DETAILS_CACHE_STORE_HPP
 
-#include <cstdint>
+#include "virtual_device.hpp"
 
-/**
- * @brief Cached copy of `millis()` refreshed once per bridge main-loop iteration.
- */
-std::uint32_t timeKeeper::now = 0U;
+namespace DetailsCacheStore
+{
+[[nodiscard]] auto load(DeviceDetailsSnapshot &outDetails) -> bool;
+
+[[nodiscard]] auto save(const DeviceDetailsSnapshot &details) -> bool;
+
+[[nodiscard]] auto clear() -> bool;
+}  // namespace DetailsCacheStore
+
+#endif  // LSH_BRIDGE_DETAILS_CACHE_STORE_HPP

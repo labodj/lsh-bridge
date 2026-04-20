@@ -26,12 +26,36 @@
 
 namespace
 {
+/**
+ * @brief Copy validated JSON IDs into one ETL vector owned by the runtime model.
+ *
+ * @tparam Capacity ETL vector capacity.
+ * @param source validated JSON array of IDs.
+ * @param target ETL vector that receives the copied IDs.
+ */
 template <std::size_t Capacity> void copyValidatedIds(const JsonArrayConst &source, etl::vector<std::uint8_t, Capacity> &target)
 {
     target.clear();
     for (const JsonVariantConst idVariant : source)
     {
         target.push_back(idVariant.as<std::uint8_t>());
+    }
+}
+
+/**
+ * @brief Copy one stored ETL ID vector into another ETL vector of the same capacity.
+ *
+ * @tparam Capacity ETL vector capacity.
+ * @param source cached ID vector to copy from.
+ * @param target destination vector to rewrite.
+ */
+template <std::size_t Capacity>
+void copyStoredIds(const etl::vector<std::uint8_t, Capacity> &source, etl::vector<std::uint8_t, Capacity> &target)
+{
+    target.clear();
+    for (const std::uint8_t id : source)
+    {
+        target.push_back(id);
     }
 }
 
@@ -50,21 +74,43 @@ constexpr std::uint8_t BIT_MASK_8[8] = {0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U
  *          cached topology invalidates the runtime state, because the next
  *          authoritative state frame must become the new baseline for that
  *          topology.
+ *
+ * @param details plain validated topology snapshot that becomes the new cached
+ *        bridge-side baseline.
+ */
+void VirtualDevice::setDetails(const DeviceDetailsSnapshot &details)
+{
+    DP_CONTEXT();
+    DPL("↑ Name: ", details.name.c_str());
+    DPL("↑ Total actuators from snapshot: ", details.actuatorIds.size());
+    DPL("↑ Total buttons from snapshot: ", details.buttonIds.size());
+
+    this->name.assign(details.name.c_str());
+    this->detailsCached = true;
+    this->totalActuators = static_cast<std::uint8_t>(details.actuatorIds.size());
+    this->actuatorsState.reset();
+    this->invalidateRuntimeModel();
+    copyStoredIds(details.actuatorIds, this->actuatorIds);
+    copyStoredIds(details.buttonIds, this->buttonIds);
+}
+
+/**
+ * @brief Caches the validated bootstrap topology snapshot.
+ * @details This overload accepts validated JSON views directly. It materializes
+ *          a plain `DeviceDetailsSnapshot` and forwards the actual mutation to
+ *          the struct-based overload so the cache logic remains single-sourced.
+ *
+ * @param deviceName validated device name extracted from `DEVICE_DETAILS`.
+ * @param actuatorIds validated JSON array of logical actuator IDs.
+ * @param buttonIds validated JSON array of logical button IDs.
  */
 void VirtualDevice::setDetails(const char *const deviceName, const JsonArrayConst &actuatorIds, const JsonArrayConst &buttonIds)
 {
-    DP_CONTEXT();
-    DPL("↑ Name: ", deviceName);
-    DPL("↑ Total actuators from JSON: ", actuatorIds.size());
-    DPL("↑ Total buttons from JSON: ", buttonIds.size());
-
-    this->name.assign(deviceName);
-    this->detailsCached = true;
-    this->totalActuators = static_cast<std::uint8_t>(actuatorIds.size());
-    this->actuatorsState.reset();
-    this->invalidateRuntimeModel();
-    copyValidatedIds(actuatorIds, this->actuatorIds);
-    copyValidatedIds(buttonIds, this->buttonIds);
+    DeviceDetailsSnapshot details{};
+    details.name.assign(deviceName);
+    copyValidatedIds(actuatorIds, details.actuatorIds);
+    copyValidatedIds(buttonIds, details.buttonIds);
+    this->setDetails(details);
 }
 
 /**
@@ -72,7 +118,7 @@ void VirtualDevice::setDetails(const char *const deviceName, const JsonArrayCons
  * @details The bridge keeps a compact authoritative bitset plus a cumulative
  *          dirty bitset. When multiple controller state frames arrive inside the
  *          same publish window, the dirty bitset keeps the union of changes so
- *          Homie still refreshes every actuator whose published state became stale.
+ *          Homie refreshes every actuator whose published state became stale.
  *
  * @param packedBytes A JsonArrayConst containing the packed bytes [byte0, byte1, ...].
  */
@@ -134,7 +180,7 @@ auto VirtualDevice::getName() const -> const etl::istring &
  * @brief Returns whether the bridge already cached a validated details payload.
  *
  * @return true if cached details are available.
- * @return false if the topology snapshot is still missing.
+ * @return false if the topology snapshot is missing.
  */
 auto VirtualDevice::hasCachedDetails() const noexcept -> bool
 {
@@ -172,6 +218,72 @@ auto VirtualDevice::populateDetailsDocument(JsonDocument &doc) const -> bool
     for (const std::uint8_t buttonId : this->buttonIds)
     {
         buttonIds.add(buttonId);
+    }
+
+    return true;
+}
+
+/**
+ * @brief Copies the cached topology into a plain bridge-side snapshot.
+ * @details Used by the NVS cache layer and by topology-comparison logic that
+ *          should not depend on temporary JSON views.
+ *
+ * @param out destination snapshot that receives the cached topology.
+ * @return true if cached details were available and copied into `out`.
+ * @return false if no validated topology is currently cached; in that case
+ *         `out` is cleared for safety.
+ */
+auto VirtualDevice::exportDetailsSnapshot(DeviceDetailsSnapshot &out) const noexcept -> bool
+{
+    if (!this->detailsCached)
+    {
+        out.clear();
+        return false;
+    }
+
+    out.name.assign(this->name.c_str());
+    copyStoredIds(this->actuatorIds, out.actuatorIds);
+    copyStoredIds(this->buttonIds, out.buttonIds);
+    return true;
+}
+
+/**
+ * @brief Returns whether a validated topology exactly matches the cached one.
+ * @details The bridge uses exact matching because any topology drift, even a
+ *          simple device-name change, can affect MQTT topic layout and Homie
+ *          node identity.
+ *
+ * @param details validated topology snapshot to compare against the cached one.
+ * @return true if name, actuator IDs and button IDs all match exactly.
+ * @return false if no topology is cached yet or if any field differs.
+ */
+auto VirtualDevice::matchesDetails(const DeviceDetailsSnapshot &details) const noexcept -> bool
+{
+    if (!this->detailsCached)
+    {
+        return false;
+    }
+
+    if (this->name != details.name || this->actuatorIds.size() != details.actuatorIds.size() ||
+        this->buttonIds.size() != details.buttonIds.size())
+    {
+        return false;
+    }
+
+    for (std::size_t index = 0U; index < this->actuatorIds.size(); ++index)
+    {
+        if (this->actuatorIds[index] != details.actuatorIds[index])
+        {
+            return false;
+        }
+    }
+
+    for (std::size_t index = 0U; index < this->buttonIds.size(); ++index)
+    {
+        if (this->buttonIds[index] != details.buttonIds[index])
+        {
+            return false;
+        }
     }
 
     return true;
@@ -242,7 +354,7 @@ auto VirtualDevice::getStateByIndex(std::uint8_t index) const noexcept -> bool
 }
 
 /**
- * @brief Returns whether an actuator still needs a Homie state refresh.
+ * @brief Returns whether an actuator needs a Homie state refresh.
  */
 auto VirtualDevice::isActuatorDirty(std::uint8_t index) const noexcept -> bool
 {

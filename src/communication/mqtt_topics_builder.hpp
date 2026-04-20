@@ -27,24 +27,17 @@
 
 #include "constants/configs/mqtt.hpp"
 
-/**
- * @brief MQTT topics builder.
- *
- */
 namespace MqttTopicsBuilder
 {
-extern etl::string<constants::mqtt::MQTT_BASE_TOPIC_LENGTH>
-    mqttBaseTopic;  //!< Common `base/deviceName/` prefix reused by all bridge topics.
-extern etl::string<constants::mqtt::MQTT_MAX_IN_TOPIC_LENGTH> mqttInTopic;  //!< Device-scoped inbound command topic.
-extern std::uint32_t mqttInTopicHash;  //!< Precomputed hash of `mqttInTopic`, used inside the hot MQTT callback.
-extern etl::string<constants::mqtt::MQTT_MAX_OUT_CONF_TOPIC_LENGTH>
-    mqttOutConfTopic;  //!< Outbound topic that publishes validated cached details.
-extern etl::string<constants::mqtt::MQTT_MAX_OUT_STATE_TOPIC_LENGTH>
-    mqttOutStateTopic;  //!< Outbound topic that publishes authoritative packed actuator state.
-extern etl::string<constants::mqtt::MQTT_MAX_OUT_MISC_TOPIC_LENGTH>
-    mqttOutMiscTopic;  //!< Outbound topic for click events and miscellaneous controller payloads.
+extern etl::string<constants::mqtt::MQTT_BASE_TOPIC_LENGTH> mqttBaseTopic;
+extern etl::string<constants::mqtt::MQTT_MAX_IN_TOPIC_LENGTH> mqttInTopic;
+extern std::uint32_t mqttInTopicHash;
+extern etl::string<constants::mqtt::MQTT_MAX_OUT_CONF_TOPIC_LENGTH> mqttOutConfTopic;
+extern etl::string<constants::mqtt::MQTT_MAX_OUT_STATE_TOPIC_LENGTH> mqttOutStateTopic;
+extern etl::string<constants::mqtt::MQTT_MAX_OUT_EVENTS_TOPIC_LENGTH> mqttOutEventsTopic;
+extern etl::string<constants::mqtt::MQTT_MAX_OUT_BRIDGE_TOPIC_LENGTH> mqttOutBridgeTopic;
 
-void updateMqttTopics(const char *deviceName);  // Rebuild every topic after the controller name becomes known
+void updateMqttTopics(const char *deviceName);
 }  // namespace MqttTopicsBuilder
 
 #endif  // LSH_BRIDGE_COMMUNICATION_MQTT_TOPICS_BUILDER_HPP

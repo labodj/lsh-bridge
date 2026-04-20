@@ -32,15 +32,23 @@
 #include "constants/configs/ping.hpp"
 #include "constants/payloads.hpp"
 #include "debug/debug.hpp"
+#include "utils/json_scalars.hpp"
 #include "utils/payloads.hpp"
 #include "utils/time_keeper.hpp"
 #include "virtual_device.hpp"
 
 using namespace constants::payloads;
 using constants::DeserializeExitCode;
+#ifdef CONFIG_MSG_PACK_ARDUINO
+using lsh::bridge::transport::MsgPackFrameConsumeResult;
+using lsh::bridge::transport::MsgPackFrameWriter;
+#endif
 
 namespace
 {
+/**
+ * @brief Validated view of the fields that make up one `DEVICE_DETAILS` payload.
+ */
 struct ValidatedDetailsPayload
 {
     const char *deviceName = nullptr;
@@ -55,35 +63,14 @@ struct ValidatedDetailsPayload
  */
 constexpr std::uint8_t kPackedBitMask[8] = {0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U};
 
-auto tryGetUint8Scalar(const JsonVariantConst value, std::uint8_t &outValue) -> bool
-{
-    if (value.isNull() || value.is<const char *>() || value.is<bool>() || value.is<JsonArrayConst>() || value.is<JsonObjectConst>())
-    {
-        return false;
-    }
-
-    if (value.is<std::uint8_t>())
-    {
-        outValue = value.as<std::uint8_t>();
-        return true;
-    }
-
-    const double rawValue = value.as<double>();
-    if (rawValue < 0.0 || rawValue > 255.0)
-    {
-        return false;
-    }
-
-    const auto coercedValue = static_cast<std::uint8_t>(rawValue);
-    if (static_cast<double>(coercedValue) != rawValue)
-    {
-        return false;
-    }
-
-    outValue = coercedValue;
-    return true;
-}
-
+/**
+ * @brief Validate that one JSON ID array contains only unique positive IDs.
+ *
+ * @param idList JSON array to validate.
+ * @param maxAllowedIds maximum number of elements accepted by the current build.
+ * @return true if `idList` contains only unique IDs in the range `[1, 255]`.
+ * @return false if the array is too large or contains invalid/duplicate IDs.
+ */
 auto validatePositiveUniqueIds(const JsonArrayConst &idList, std::size_t maxAllowedIds) -> bool
 {
     if (idList.size() > maxAllowedIds)
@@ -95,7 +82,7 @@ auto validatePositiveUniqueIds(const JsonArrayConst &idList, std::size_t maxAllo
     for (const JsonVariantConst idVariant : idList)
     {
         std::uint8_t validatedId = 0U;
-        if (!tryGetUint8Scalar(idVariant, validatedId))
+        if (!utils::json::tryGetUint8Scalar(idVariant, validatedId))
         {
             return false;
         }
@@ -109,13 +96,21 @@ auto validatePositiveUniqueIds(const JsonArrayConst &idList, std::size_t maxAllo
     return true;
 }
 
+/**
+ * @brief Validate the last received `DEVICE_DETAILS` payload without mutating the runtime model.
+ *
+ * @param receivedDoc decoded controller frame to validate.
+ * @param outPayload destination view populated only on success.
+ * @return DeserializeExitCode::OK_DETAILS if the payload is structurally valid.
+ * @return any other `DeserializeExitCode` if a required field is missing or invalid.
+ */
 auto validateReceivedDetailsPayload(const JsonDocument &receivedDoc, ValidatedDetailsPayload &outPayload) -> DeserializeExitCode
 {
     using namespace lsh::bridge::protocol;
 
     const JsonVariantConst protocolMajor = receivedDoc[KEY_PROTOCOL_MAJOR];
     std::uint8_t validatedProtocolMajor = 0U;
-    if (!tryGetUint8Scalar(protocolMajor, validatedProtocolMajor))
+    if (!utils::json::tryGetUint8Scalar(protocolMajor, validatedProtocolMajor))
     {
         DPL("Error: Missing or invalid 'v' key in device details JSON.");
         return DeserializeExitCode::ERR_MISSING_KEY_PROTOCOL_MAJOR;
@@ -176,17 +171,54 @@ auto validateReceivedDetailsPayload(const JsonDocument &receivedDoc, ValidatedDe
 
 }  // namespace
 
+#ifdef CONFIG_MSG_PACK_ARDUINO
 /**
- * @brief Send a static Json payload.
+ * @brief Send one raw MsgPack payload through the framed serial transport.
+ * @details The framing layer is transport-only: callers still pass the pure
+ *          MsgPack payload bytes, while this helper adds the opening delimiter,
+ *          escapes reserved bytes on the fly and closes the frame.
  *
- * @param payloadType type of the payload.
+ * @param buffer pointer to the pure MsgPack payload bytes.
+ * @param length number of payload bytes available in `buffer`.
+ * @return true if the full payload and both frame delimiters were accepted by the UART driver.
+ * @return false if the UART driver rejected part of the frame.
  */
-void ControllerSerialLink::sendJson(constants::payloads::StaticType payloadType)
+auto ControllerSerialLink::sendFramedMsgPackBuffer(const std::uint8_t *buffer, std::size_t length) -> bool
+{
+    if (buffer == nullptr || length == 0U)
+    {
+        return false;
+    }
+
+    MsgPackFrameWriter framedWriter(*this->serial);
+    if (!framedWriter.beginFrame())
+    {
+        return false;
+    }
+
+    const std::size_t writtenPayloadBytes = framedWriter.write(buffer, length);
+    const bool frameEnded = framedWriter.endFrame();
+    return writtenPayloadBytes == length && frameEnded;
+}
+#endif
+
+/**
+ * @brief Send one compile-time pre-serialized static control payload.
+ * @details This path is used for tiny pre-generated bridge/control payloads
+ *          such as `PING`, `ASK_DETAILS`, `ASK_STATE` and the generic
+ *          failover frame. No temporary JSON document is built at runtime.
+ *
+ * @param payloadType semantic identifier of the pre-generated payload bytes to
+ *        send over the active serial codec.
+ * @return true if the UART accepted the complete pre-generated payload.
+ * @return false if throttling or a partial UART write prevented a full send.
+ */
+auto ControllerSerialLink::sendJson(constants::payloads::StaticType payloadType) -> bool
 {
     using constants::payloads::StaticType;
     if (payloadType == StaticType::PING_ && !this->canPing())
     {
-        return;
+        return false;
     }
 
     // Select the prebuilt static payload table that matches the active wire format.
@@ -196,34 +228,65 @@ void ControllerSerialLink::sendJson(constants::payloads::StaticType payloadType)
     constexpr bool useMsgPack = false;
 #endif
 
-    const auto payloadToSend = utils::payloads::get<useMsgPack>(payloadType);
+    const auto payloadToSend = utils::payloads::getSerial<useMsgPack>(payloadType);
 
     if (!payloadToSend.empty())
     {
-        this->serial->write(payloadToSend.data(), payloadToSend.size());
+        const std::size_t writtenBytes = this->serial->write(payloadToSend.data(), payloadToSend.size());
+        if (writtenBytes != payloadToSend.size())
+        {
+            return false;
+        }
         this->updateLastSentTime();
+        return true;
     }
+
+    return false;
 }
 
 /**
  * @brief Sends a JsonDocument via Serial.
+ * @details The active wire codec is selected at build time. JSON builds
+ *          serialize newline-delimited text frames, while MsgPack builds emit
+ *          the compact binary representation through the framed serial
+ *          transport used on the controller link.
  *
- * @param json JsonDocument to be sent.
+ * @param json document to serialize and send over the active serial codec.
+ * @return true if the full serialized payload has been accepted by the UART.
+ * @return false if serialization produced no bytes or the UART accepted only a
+ *         partial frame.
  */
-void ControllerSerialLink::sendJson(const JsonDocument &json)
+auto ControllerSerialLink::sendJson(const JsonDocument &json) -> bool
 {
     DP_CONTEXT();
     DP("↑ Json to send: ");
     DPJ(json);
 #ifdef CONFIG_MSG_PACK_ARDUINO
-    serializeMsgPack(json, (*this->serial));
+    MsgPackFrameWriter framedWriter(*this->serial);
+    if (!framedWriter.beginFrame())
+    {
+        return false;
+    }
+
+    const std::size_t writtenPayloadBytes = serializeMsgPack(json, framedWriter);
+    const bool frameEnded = framedWriter.endFrame();
+    if (writtenPayloadBytes == 0U || !frameEnded)
+    {
+        return false;
+    }
 #else
-    serializeJson(json, (*this->serial));
+    const std::size_t expectedPayloadBytes = measureJson(json);
+    const std::size_t writtenPayloadBytes = serializeJson(json, (*this->serial));
     // Append the newline delimiter ONLY for JSON-based communication.
     // MsgPack doesn't need it.
-    this->serial->write("\n", 1);
+    const std::size_t writtenDelimiterBytes = this->serial->write("\n", 1);
+    if (writtenPayloadBytes != expectedPayloadBytes || writtenDelimiterBytes != 1U)
+    {
+        return false;
+    }
 #endif  // CONFIG_MSG_PACK_ARDUINO
     this->updateLastSentTime();
+    return true;
 }
 
 /**
@@ -236,20 +299,29 @@ void ControllerSerialLink::sendJson(const JsonDocument &json)
  *          intentionally rejected because a UTF-8 JSON string is not a valid
  *          raw MessagePack payload.
  * @param jsonString A constant pointer to a null-terminated C-style string.
+ * @return true if the full string frame has been accepted by the UART.
+ * @return false if the pointer is null, the active codec is not JSON, or the
+ *         UART accepted only part of the frame.
  */
-void ControllerSerialLink::sendJson(const char *jsonString)
+auto ControllerSerialLink::sendJson(const char *jsonString) -> bool
 {
     DP_CONTEXT();
     if (!jsonString)
-        return;
+        return false;
 
 #ifdef CONFIG_MSG_PACK_ARDUINO
     DPL("sendJson(const char*) is only valid in JSON serial mode.");
-    return;
+    return false;
 #else
-    this->serial->print(jsonString);
-    this->serial->write("\n", 1);
+    const std::size_t jsonLength = std::strlen(jsonString);
+    const std::size_t writtenPayloadBytes = this->serial->print(jsonString);
+    const std::size_t writtenDelimiterBytes = this->serial->write("\n", 1);
+    if (writtenPayloadBytes != jsonLength || writtenDelimiterBytes != 1U)
+    {
+        return false;
+    }
     this->updateLastSentTime();
+    return true;
 #endif
 }
 
@@ -260,26 +332,36 @@ void ControllerSerialLink::sendJson(const char *jsonString)
  * on null-termination.
  * @param buffer A constant pointer to the start of the buffer.
  * @param length The number of bytes to write from the buffer.
+ * @return true if the full raw payload frame has been accepted by the UART.
+ * @return false if the buffer is invalid or the UART accepted only part of the frame.
  */
-void ControllerSerialLink::sendJson(const char *buffer, size_t length)
+auto ControllerSerialLink::sendJson(const char *buffer, size_t length) -> bool
 {
     DP_CONTEXT();
     if (!buffer || length == 0)
-        return;
+        return false;
 #ifdef CONFIG_MSG_PACK_ARDUINO
-    this->serial->write(reinterpret_cast<const uint8_t *>(buffer), length);
+    if (!this->sendFramedMsgPackBuffer(reinterpret_cast<const std::uint8_t *>(buffer), length))
+    {
+        return false;
+    }
 #else
-    this->serial->write(reinterpret_cast<const uint8_t *>(buffer), length);
+    const std::size_t writtenPayloadBytes = this->serial->write(reinterpret_cast<const uint8_t *>(buffer), length);
     // Append the newline delimiter ONLY for JSON-based communication.
-    this->serial->write("\n", 1);
+    const std::size_t writtenDelimiterBytes = this->serial->write("\n", 1);
+    if (writtenPayloadBytes != length || writtenDelimiterBytes != 1U)
+    {
+        return false;
+    }
 #endif
     this->updateLastSentTime();
+    return true;
 }
 
 /**
  * @brief Copy the last controller-confirmed state into the desired-state shadow.
  * @details The bridge uses this helper when it decides that pending MQTT-side
- *          intent is no longer trustworthy, for example after a command storm
+ *          intent must be discarded, for example after a command storm
  *          or after losing runtime synchronization.
  */
 void ControllerSerialLink::realignDesiredStateShadowWithAuthoritativeLocked()
@@ -399,7 +481,7 @@ auto ControllerSerialLink::stageSingleActuatorCommand(uint8_t actuatorId, bool s
  * @brief Stage a full packed SET_STATE request inside the desired-state shadow.
  * @details The bridge unpacks the bytes into a temporary snapshot, compares it
  *          with both the currently pending snapshot and the authoritative
- *          controller state, then keeps only the actuators that still need to
+ *          controller state, then keeps only the actuators that need to
  *          be sent in the next coalesced outbound batch.
  *
  * @param packedBytes packed actuator-state bytes.
@@ -428,7 +510,7 @@ auto ControllerSerialLink::stageDesiredPackedState(const JsonArrayConst &packedB
     for (JsonVariantConst packedByteVariant : packedBytes)
     {
         std::uint8_t packedByte = 0U;
-        if (!tryGetUint8Scalar(packedByteVariant, packedByte))
+        if (!utils::json::tryGetUint8Scalar(packedByteVariant, packedByte))
         {
             return false;
         }
@@ -482,14 +564,16 @@ auto ControllerSerialLink::stageDesiredPackedState(const JsonArrayConst &packedB
  * @brief Send the coalesced SET_STATE batch once the quiet window expires.
  * @details This method snapshots the desired-state shadow, waits for a short
  *          period without newer writes, then emits one packed SET_STATE frame
- *          instead of many single actuator commands. The desired-state mutex
+ *          that represents the full desired batch. The desired-state mutex
  *          stays held from the last "is this snapshot still valid?" decision
  *          through the serial write itself, so a newer MQTT/Homie command
  *          cannot slip in after the bridge already committed to sending the
  *          current packed batch. If a producer keeps changing the desired state
  *          for too long or too many times in a single batch, the bridge treats
- *          that traffic as unstable and drops the batch rather than postponing
- *          the send forever.
+ *          that traffic as unstable and drops the batch once the safety limits
+ *          are exceeded. If the UART refuses the outbound frame, the batch is
+ *          left pending so the next loop can retry the same authoritative
+ *          intent instead of silently forgetting it.
  */
 void ControllerSerialLink::processPendingActuatorBatch()
 {
@@ -535,7 +619,7 @@ void ControllerSerialLink::processPendingActuatorBatch()
 
     if (pendingWindowExceeded || mutationBudgetExceeded)
     {
-        // This is the "command storm" safety valve. The bridge still prefers to
+        // This is the "command storm" safety valve. The bridge prefers to
         // wait for a stable intent, but it refuses to keep one batch open forever
         // under flapping or malicious traffic. In that case it discards the
         // unconfirmed desired state and trusts only the last authoritative
@@ -596,7 +680,13 @@ void ControllerSerialLink::processPendingActuatorBatch()
         }
     }
 
-    this->sendJson(this->serializationDoc);
+    if (!this->sendJson(this->serializationDoc))
+    {
+        this->unlockActuatorCommandState();
+        DPL("Serial TX did not accept the coalesced SET_STATE batch. Keeping the "
+            "desired-state batch pending for retry.");
+        return;
+    }
 
     this->desiredDirtyActuators.reset();
     this->refreshPendingActuatorBatchStateLocked();
@@ -634,7 +724,7 @@ void ControllerSerialLink::reconcileDesiredActuatorStatesFromAuthoritative()
             const bool authoritativeState = this->virtualDevice.getStateByIndex(actuatorIndex);
             if (this->desiredDirtyActuators.test(actuatorIndex))
             {
-                // This actuator still had an unconfirmed target. If the controller now
+                // This actuator has an unconfirmed target. If the controller
                 // reports that target as real, the pending intent has been satisfied.
                 if (this->desiredActuatorStates[actuatorIndex] == authoritativeState)
                 {
@@ -671,7 +761,7 @@ void ControllerSerialLink::reconcileDesiredActuatorStatesFromAuthoritative()
 /**
  * @brief Copy the last pending unstable-batch diagnostic without clearing it.
  * @details The outer bridge runtime uses this method to build a bridge-local
- *          MQTT diagnostic event on the `misc` topic only after publishing is
+ *          MQTT diagnostic event on the `bridge` topic only after publishing is
  *          known to be possible.
  *
  * @param outDiagnostic destination structure that receives the diagnostic.
@@ -704,7 +794,10 @@ void ControllerSerialLink::clearPendingActuatorStormDiagnostic()
 }
 
 /**
- * @brief Clean implementation for registering the callback.
+ * @brief Register the high-level payload callback used by the outer bridge runtime.
+ *
+ * @param callback delegate invoked after one complete controller frame has been
+ *        decoded and classified.
  */
 void ControllerSerialLink::onMessage(MessageCallback callback)
 {
@@ -712,41 +805,76 @@ void ControllerSerialLink::onMessage(MessageCallback callback)
 }
 
 /**
- * @brief Reads the serial buffer, processes all complete messages, and invokes
- * a callback for each.
- * @details JSON transport uses newline-delimited text frames. MessagePack
- * transport relies on ArduinoJson stream deserialization directly over the
- * serial link. For each complete message the method deserializes the payload
- * and invokes the registered callback delegate if it's valid.
+ * @brief Reads the serial buffer, processes at most one complete message, and invokes
+ *        the registered callback for it.
+ * @details JSON transport uses newline-delimited text frames. MsgPack
+ *          transport uses a SLIP-like delimiter-and-escape layer on top of the
+ *          pure MsgPack payload, so the serial path never relies on stream
+ *          timeouts as implicit framing. Each call also obeys a raw-byte
+ *          fairness budget so noisy UART traffic cannot monopolize one bridge
+ *          loop iteration. When a complete payload is decoded and validated,
+ *          the method invokes the registered callback and returns immediately.
  */
 void ControllerSerialLink::processSerialBuffer()
 {
+    std::uint16_t consumedBytes = 0U;
+
 #ifdef CONFIG_MSG_PACK_ARDUINO
-    if (!this->serial->available())
-    {
-        return;
-    }
+    const std::uint32_t nowRealTime_ms = timeKeeper::getRealTime();
+    this->msgPackFrameReceiver.resetIfIdle(nowRealTime_ms, constants::controllerSerial::ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS);
 
-    this->receivedDoc.clear();
-    const DeserializationError deserializationError = deserializeMsgPack(this->receivedDoc, *this->serial);
-    if (deserializationError != DeserializationError::Ok)
+    while (this->serial->available() && consumedBytes < constants::controllerSerial::SERIAL_MAX_RX_BYTES_PER_LOOP)
     {
-        DPL("Fatal deserialization error: ", deserializationError.c_str());
-        return;
-    }
+        const int rawByte = this->serial->read();
+        if (rawByte < 0)
+        {
+            break;
+        }
+        ++consumedBytes;
 
-    this->updateLastReceivedTime();
-    const auto messageType = this->deserialize();
-    if (this->messageCallback.is_valid())
-    {
-        this->messageCallback(messageType, this->receivedDoc);
+        const auto consumeResult = this->msgPackFrameReceiver.consumeByte(static_cast<std::uint8_t>(rawByte), nowRealTime_ms);
+        if (consumeResult == MsgPackFrameConsumeResult::FrameDiscarded)
+        {
+            DPL("Discarded malformed framed MsgPack controller payload.");
+            continue;
+        }
+
+        if (consumeResult != MsgPackFrameConsumeResult::FrameComplete)
+        {
+            continue;
+        }
+
+        this->receivedDoc.clear();
+        const DeserializationError deserializationError =
+            deserializeMsgPack(this->receivedDoc, this->msgPackFrameReceiver.frameData(), this->msgPackFrameReceiver.frameLength());
+        this->msgPackFrameReceiver.reset();
+        if (deserializationError != DeserializationError::Ok)
+        {
+            DPL("MsgPack deserialization error: ", deserializationError.c_str());
+            return;
+        }
+
+        this->updateLastReceivedTime();
+        const auto messageType = this->deserialize();
+        if (this->messageCallback.is_valid())
+        {
+            this->messageCallback(messageType, this->receivedDoc);
+        }
+        return;
     }
     return;
 
 #else
-    while (this->serial->available())
+    while (this->serial->available() && consumedBytes < constants::controllerSerial::SERIAL_MAX_RX_BYTES_PER_LOOP)
     {
-        char receivedChar = this->serial->read();
+        const int rawByte = this->serial->read();
+        if (rawByte < 0)
+        {
+            break;
+        }
+        ++consumedBytes;
+
+        char receivedChar = static_cast<char>(rawByte);
 
         if (this->discardInputUntilNewline)
         {
@@ -775,13 +903,14 @@ void ControllerSerialLink::processSerialBuffer()
                 const auto messageType = this->deserialize();
                 if (this->messageCallback.is_valid())
                 {
-                    // The receivedDoc is now populated. It uses zero-copy and points
+                    // The receivedDoc is populated. It uses zero-copy and points
                     // directly into rxBuffer. The messageCallback is responsible for
                     // either copying the data into a persistent storage (like
                     // VirtualDevice) or re-serializing it for forwarding. The rxBuffer
                     // will be reused for the next message, so its content is volatile
                     this->messageCallback(messageType, this->receivedDoc);
                 }
+                return;
             }
             else
             {
@@ -837,7 +966,7 @@ auto ControllerSerialLink::deserialize() -> constants::DeserializeExitCode
     }
 
     std::uint8_t rawCommandId = 0U;
-    if (!tryGetUint8Scalar(commandVariant, rawCommandId))
+    if (!utils::json::tryGetUint8Scalar(commandVariant, rawCommandId))
     {
         return DeserializeExitCode::ERR_UNKNOWN_PAYLOAD;
     }
@@ -887,7 +1016,7 @@ auto ControllerSerialLink::storeStateFromReceived() const -> constants::Deserial
     for (JsonVariantConst packedByte : packedBytes)
     {
         std::uint8_t validatedPackedByte = 0U;
-        if (!tryGetUint8Scalar(packedByte, validatedPackedByte))
+        if (!utils::json::tryGetUint8Scalar(packedByte, validatedPackedByte))
         {
             return DeserializeExitCode::ERR_STATE_VALUE_IMPLAUSIBLE;
         }
@@ -899,14 +1028,19 @@ auto ControllerSerialLink::storeStateFromReceived() const -> constants::Deserial
 }
 
 /**
- * @brief Validate and cache received details.
- * @details The bridge stores the full validated topology snapshot that it needs
- *          for future cache-based replies: device name, actuator IDs and button
- *          IDs. State validity remains independent and still requires a fresh
- *          authoritative state frame.
- * @return constants::DeserializeExitCode the result of validation and saving.
+ * @brief Validate and materialize received details without mutating the active model.
+ * @details The bridge uses this method when it must compare a fresh controller
+ *          topology against the currently cached one before deciding whether a
+ *          reboot is required.
+ *
+ * @param outDetails destination snapshot that receives the validated topology.
+ * @return constants::DeserializeExitCode::OK_DETAILS if the last received
+ *         payload is a valid `DEVICE_DETAILS` frame and has been copied into
+ *         `outDetails`.
+ * @return any other `DeserializeExitCode` if validation fails; in that case the
+ *         caller must treat `outDetails` as cleared/transient data only.
  */
-auto ControllerSerialLink::storeDetailsFromReceived() const -> constants::DeserializeExitCode
+auto ControllerSerialLink::parseDetailsFromReceived(DeviceDetailsSnapshot &outDetails) const -> constants::DeserializeExitCode
 {
     DP_CONTEXT();
     ValidatedDetailsPayload detailsPayload{};
@@ -916,7 +1050,43 @@ auto ControllerSerialLink::storeDetailsFromReceived() const -> constants::Deseri
         return result;
     }
 
-    this->virtualDevice.setDetails(detailsPayload.deviceName, detailsPayload.actuatorIds, detailsPayload.buttonIds);
+    outDetails.clear();
+    outDetails.name.assign(detailsPayload.deviceName);
+    for (const JsonVariantConst idVariant : detailsPayload.actuatorIds)
+    {
+        outDetails.actuatorIds.push_back(idVariant.as<std::uint8_t>());
+    }
+
+    for (const JsonVariantConst idVariant : detailsPayload.buttonIds)
+    {
+        outDetails.buttonIds.push_back(idVariant.as<std::uint8_t>());
+    }
+
+    return DeserializeExitCode::OK_DETAILS;
+}
+
+/**
+ * @brief Validate and cache received details.
+ * @details The bridge stores the full validated topology snapshot that it needs
+ *          for future cache-based replies: device name, actuator IDs and button
+ *          IDs. State validity remains independent and requires a fresh
+ *          authoritative state frame.
+ *
+ * @return constants::DeserializeExitCode::OK_DETAILS if validation succeeds and
+ *         the in-memory `VirtualDevice` cache has been updated.
+ * @return any other `DeserializeExitCode` if the last received payload is not a
+ *         valid `DEVICE_DETAILS` frame.
+ */
+auto ControllerSerialLink::storeDetailsFromReceived() const -> constants::DeserializeExitCode
+{
+    DeviceDetailsSnapshot details{};
+    const auto result = this->parseDetailsFromReceived(details);
+    if (result != DeserializeExitCode::OK_DETAILS)
+    {
+        return result;
+    }
+
+    this->virtualDevice.setDetails(details);
     return DeserializeExitCode::OK_DETAILS;
 }
 
@@ -944,12 +1114,14 @@ void ControllerSerialLink::updateLastSentTime()
 }
 
 /**
- * @brief Set last time payload has been received to now.
- *
+ * @brief Cache the receive timestamp of the most recent valid controller frame.
+ * @details This is also the moment from which the bridge may honestly claim
+ *          that the controller link is alive for this boot session.
  */
 void ControllerSerialLink::updateLastReceivedTime()
 {
     // DP_CONTEXT(); pollutes serial
+    this->hasSeenControllerTraffic = true;
     this->lastReceivedPayloadTime_ms = timeKeeper::getTime();
 }
 
@@ -970,7 +1142,7 @@ auto ControllerSerialLink::triggerFailoverFromReceivedClick() -> constants::Dese
         !this->receivedDoc.containsKey(KEY_CORRELATION_ID))
     {
         DPL("Cannot create specific failover, sending general failover.");
-        this->sendJson(StaticType::GENERAL_FAILOVER);
+        (void)this->sendJson(StaticType::GENERAL_FAILOVER);
         return DeserializeExitCode::ERR_NOT_CONNECTED_GENERAL_FAILOVER_SENT;
     }
 
@@ -984,13 +1156,17 @@ auto ControllerSerialLink::triggerFailoverFromReceivedClick() -> constants::Dese
     this->serializationDoc[KEY_ID] = jsonButtonID;
     this->serializationDoc[KEY_CORRELATION_ID] = this->receivedDoc[KEY_CORRELATION_ID];
 
-    this->sendJson(this->serializationDoc);
+    (void)this->sendJson(this->serializationDoc);
     return DeserializeExitCode::ERR_NOT_CONNECTED_FAILOVER_SENT;
 }
 
 /**
- * @brief Returns if ESP is connected or not to attached device, the assumption
- * is based on last received message time.
+ * @brief Return whether the controller is considered connected right now.
+ * @details The bridge reports the controller as connected only after it has
+ *          decoded at least one valid frame in this boot session and that frame
+ *          is inside the configured liveness timeout window. The explicit
+ *          `hasSeenControllerTraffic` gate prevents the runtime from treating
+ *          a never-seen controller as connected.
  *
  * @return true if attached device is connected.
  * @return false if attached device isn't connected.
@@ -998,5 +1174,6 @@ auto ControllerSerialLink::triggerFailoverFromReceivedClick() -> constants::Dese
 auto ControllerSerialLink::isConnected() const -> bool
 {
     using constants::ping::CONNECTION_TIMEOUT_CONTROLLINO_MS;
-    return ((timeKeeper::getTime() - this->lastReceivedPayloadTime_ms) < CONNECTION_TIMEOUT_CONTROLLINO_MS);
+    return this->hasSeenControllerTraffic &&
+           ((timeKeeper::getTime() - this->lastReceivedPayloadTime_ms) < CONNECTION_TIMEOUT_CONTROLLINO_MS);
 }

@@ -66,6 +66,12 @@ private:
 public:
     constexpr VaPrint() = default;
 
+    /** @brief Return the output stream currently used by this helper. */
+    [[nodiscard]] auto stream() -> Print &
+    {
+        return *this->m_pr;
+    }
+
     /**
      * @brief Print many values in sequence.
      *

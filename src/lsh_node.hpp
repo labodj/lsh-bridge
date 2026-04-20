@@ -29,14 +29,11 @@
 #include "constants/homie.hpp"
 #include "debug/debug.hpp"
 
-class ControllerSerialLink;  //!< FORWARD DECLARATION
-class VirtualDevice;         //!< FORWARD DECLARATION
+class ControllerSerialLink;  //!< Forward declaration of the bridge serial transport.
+class VirtualDevice;         //!< Forward declaration of the cached controller model.
 
 /**
  * @brief Stores the decimal Homie node ID derived from a numeric actuator ID.
- * @details `HomieNode` needs C-style strings during base-class construction, so
- *          the converted ID string must already exist before the `HomieNode`
- *          constructor runs.
  */
 struct HomieIdHolder
 {
@@ -56,22 +53,15 @@ struct HomieIdHolder
 class LSHNode : private HomieIdHolder, public HomieNode
 {
 private:
-    ControllerSerialLink &controllerSerialLink;  //!< Serial communication object
-    VirtualDevice &virtualDevice;                //!< Reference to the main cached device model
-    const std::uint8_t actuatorIndex;            //!< Index of this actuator for O(1) access
-    const std::uint8_t actuatorId;               //!< Logical numeric actuator ID used on the wire
+    ControllerSerialLink &controllerSerialLink;  //!< Serial communication object.
+    VirtualDevice &virtualDevice;                //!< Reference to the main cached device model.
+    const std::uint8_t actuatorIndex;            //!< Index of this actuator for O(1) access.
+    const std::uint8_t actuatorId;               //!< Logical numeric actuator ID used on the wire.
 
-    [[nodiscard]] auto handleSetCommand(const HomieRange &range, const String &value) -> bool;  // Callback for MQTT `/set` commands
+    [[nodiscard]] auto handleSetCommand(const HomieRange &range, const String &value) -> bool;
 
 public:
-    /**
-     * @brief Construct a new LSHNode object.
-     *
-     * @param controllerSerialLink serial link used to send commands to the controller.
-     * @param virtualDevice cached device model.
-     * @param index actuator index.
-     * @param numericId logical actuator ID.
-     */
+    /** @brief Construct one Homie node that mirrors one cached controller actuator. */
     LSHNode(ControllerSerialLink &controllerSerialLink, VirtualDevice &virtualDevice, std::uint8_t index, std::uint8_t numericId) :
         HomieIdHolder(numericId), HomieNode(homieId.c_str(), homieId.c_str(), constants::homie::HOMIE_ACTUATOR_TYPE),
         controllerSerialLink(controllerSerialLink), virtualDevice(virtualDevice), actuatorIndex(index), actuatorId(numericId)
@@ -84,7 +74,7 @@ public:
             .settable([this](const HomieRange &range, const String &value) -> bool { return this->handleSetCommand(range, value); });
     }
 
-    void sendState() const;  // Send cached actuator state to Homie
+    [[nodiscard]] auto sendState() const -> bool;
 };
 
 #endif  // LSH_BRIDGE_LSH_NODE_HPP

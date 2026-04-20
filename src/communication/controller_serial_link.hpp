@@ -37,26 +37,22 @@
 #include "constants/configs/virtual_device.hpp"
 #include "constants/deserialize_exit_codes.hpp"
 #include "constants/payloads.hpp"
+#include "communication/msgpack_serial_framing.hpp"
 
-class VirtualDevice;  //!< FORWARD DECLARATION
+struct DeviceDetailsSnapshot;
+class VirtualDevice;
 
 /**
  * @brief Handles serial communication with the attached controller.
- * @details The active codec is selected at build time: JSON uses newline-delimited
- *          text frames, while MsgPack is exchanged as raw payload bytes.
  */
 class ControllerSerialLink
 {
 public:
-    /**
-     * @brief Callback invoked after a payload has been decoded.
-     *
-     */
+    /** @brief Callback invoked after one payload has been decoded. */
     using MessageCallback = etl::delegate<void(constants::DeserializeExitCode, const JsonDocument &)>;
 
     /**
-     * @brief Describes one actuator batch dropped because the incoming intent
-     *        never became stable enough to send safely.
+     * @brief Describes one actuator batch dropped because the incoming intent never became stable enough to send safely.
      */
     struct ActuatorStormDiagnostic
     {
@@ -65,27 +61,32 @@ public:
     };
 
 private:
-    std::uint32_t lastSentPayloadTime_ms = 0U;      //!< Last time a payload has been sent to Controllino
-    std::uint32_t lastReceivedPayloadTime_ms = 0U;  //!< Last time a valid payload has been received from Controllino
-    HardwareSerial *const serial;                   //!< The serial port used to communicate with controllino
-    VirtualDevice &virtualDevice;                   //!< Device details holder to store received details
-    StaticJsonDocument<constants::controllerSerial::JSON_RECEIVED_MAX_SIZE> receivedDoc;  //!< Last received json document
+    std::uint32_t lastSentPayloadTime_ms = 0U;      //!< Last time a payload has been sent to the controller.
+    std::uint32_t lastReceivedPayloadTime_ms = 0U;  //!< Last time a valid payload has been received from the controller.
+    bool hasSeenControllerTraffic = false;          //!< True after the bridge has decoded at least one valid controller frame in this boot.
+    HardwareSerial *const serial;                   //!< The serial port used to communicate with the controller.
+    VirtualDevice &virtualDevice;                   //!< Device-details holder that stores received details and state.
+    StaticJsonDocument<constants::controllerSerial::JSON_RECEIVED_MAX_SIZE> receivedDoc;  //!< Last received JSON document.
     StaticJsonDocument<constants::controllerSerial::MQTT_RECEIVED_DOC_MAX_SIZE>
-        serializationDoc;  //!< Reusable doc for bridge-generated commands and coalesced SET_STATE batches.
-#ifndef CONFIG_MSG_PACK_ARDUINO
+        serializationDoc;  //!< Reusable doc for bridge-generated commands and coalesced `SET_STATE` batches.
+#ifdef CONFIG_MSG_PACK_ARDUINO
+    char
+        rxBuffer[constants::controllerSerial::SERIAL_RX_BUFFER_SIZE];  //!< Temporary buffer used for one complete deframed MsgPack payload.
+    lsh::bridge::transport::MsgPackFrameReceiver msgPackFrameReceiver;  //!< Incremental deframer used by the serial MsgPack transport.
+#else
     char rxBuffer
-        [constants::controllerSerial::RAW_MESSAGE_MAX_SIZE];  //!< Temporary buffer used to assemble one newline-terminated JSON frame
-    std::uint16_t rxBufferIndex = 0U;                         //!< Current write index inside rxBuffer
-    bool discardInputUntilNewline = false;                    //!< True while draining an oversized JSON frame until its terminating newline
+        [constants::controllerSerial::SERIAL_RX_BUFFER_SIZE];  //!< Temporary buffer used to assemble one newline-terminated JSON frame.
+    std::uint16_t rxBufferIndex = 0U;                          //!< Current write index inside `rxBuffer`.
+    bool discardInputUntilNewline = false;  //!< True while draining an oversized JSON frame until its terminating newline.
 #endif
     // This block stores "what the bridge would like the controller state to become".
     // It is intentionally separate from VirtualDevice, which stores only the last
     // controller-confirmed authoritative state.
     bool desiredActuatorStates
-        [constants::virtualDevice::MAX_ACTUATORS]{};  //!< Desired-state shadow used only to build the next outbound SET_STATE batch.
+        [constants::virtualDevice::MAX_ACTUATORS]{};  //!< Desired-state shadow used only to build the next outbound `SET_STATE` batch.
     etl::bitset<constants::virtualDevice::MAX_ACTUATORS>
         desiredDirtyActuators{};  //!< Outbound per-actuator mask for remote intent not yet confirmed by an authoritative controller state frame.
-    bool actuatorCommandBatchPending = false;  //!< True while a coalesced outbound SET_STATE is still waiting for its quiet window.
+    bool actuatorCommandBatchPending = false;  //!< True while a coalesced outbound `SET_STATE` is still waiting for its quiet window.
     std::uint32_t firstDesiredActuatorUpdate_ms =
         0U;  //!< Time of the first accepted change in the current batch. Used to detect command storms that keep the quiet window open forever.
     std::uint32_t lastDesiredActuatorUpdate_ms = 0U;  //!< Last time the desired-state shadow changed.
@@ -96,8 +97,9 @@ private:
         pendingActuatorStormDiagnostic{};              //!< Details about the last unstable batch dropped by the bridge safety valve.
     StaticSemaphore_t actuatorCommandMutexStorage{};   //!< Storage owned by the bridge-side desired-state mutex.
     SemaphoreHandle_t actuatorCommandMutex = nullptr;  //!< Blocking mutex that protects the desired-state shadow across short serial sends.
-    MessageCallback messageCallback;                   //!< Registered callback invoked for each decoded payload
+    MessageCallback messageCallback;                   //!< Registered callback invoked for each decoded payload.
 
+    /** @brief Lock the desired-state shadow while the bridge updates or serializes it. */
     void lockActuatorCommandState()
     {
         // A normal mutex is used here, not a spinlock, because the coalescing path
@@ -105,101 +107,80 @@ private:
         (void)xSemaphoreTake(this->actuatorCommandMutex, portMAX_DELAY);
     }
 
+    /** @brief Unlock the desired-state shadow after a short critical section. */
     void unlockActuatorCommandState()
     {
         (void)xSemaphoreGive(this->actuatorCommandMutex);
     }
 
-    // Process
-    [[nodiscard]] auto deserialize() -> constants::DeserializeExitCode;  // Deserialize a json
-    [[nodiscard]] auto canPing() const -> bool;                          // Return if the bridge can send a ping now
+    [[nodiscard]] auto deserialize() -> constants::DeserializeExitCode;
+    [[nodiscard]] auto canPing() const -> bool;
 
-    void updateLastSentTime();      // Set last time payload has been sent to now
-    void updateLastReceivedTime();  // Set last time payload has been received to now
-    void
-    realignDesiredStateShadowWithAuthoritativeLocked();  // Copy the last controller-confirmed state into the desired-state shadow. Must be called with actuatorCommandMutex held.
-    void
-    clearPendingActuatorBatchLocked();  // Forget every pending desired-state change and reset batch bookkeeping. Must be called with actuatorCommandMutex held.
-    void refreshPendingActuatorBatchStateLocked(
-        bool restartSettleWindow = false,
-        bool markNewMutation =
-            false);  // Recomputes pending/timestamp/counter invariants from dirty bits. Must be called with actuatorCommandMutex held.
+    void updateLastSentTime();
+    void updateLastReceivedTime();
+#ifdef CONFIG_MSG_PACK_ARDUINO
+    auto sendFramedMsgPackBuffer(const std::uint8_t *buffer, std::size_t length) -> bool;
+#endif
+    void realignDesiredStateShadowWithAuthoritativeLocked();
+    void clearPendingActuatorBatchLocked();
+    void refreshPendingActuatorBatchStateLocked(bool restartSettleWindow = false, bool markNewMutation = false);
 
 public:
-    /**
-     * @brief Construct a new ControllerSerialLink object.
-     *
-     * @param hardwareSerial serial port used to talk with the controller.
-     * @param device cached bridge-side device model that receives validated details and state.
-     */
+    /** @brief Construct the controller serial transport around one UART and one cached device model. */
     ControllerSerialLink(HardwareSerial *const hardwareSerial, VirtualDevice &device) noexcept :
         serial(hardwareSerial), virtualDevice(device)
+#ifdef CONFIG_MSG_PACK_ARDUINO
+        ,
+        msgPackFrameReceiver(rxBuffer, static_cast<std::uint16_t>(sizeof(rxBuffer)))
+#endif
     {
         this->actuatorCommandMutex = xSemaphoreCreateMutexStatic(&this->actuatorCommandMutexStorage);
     }
 
-    /**
-     * @brief Initialize serial communication with the attached controller.
-     *
-     */
+    /** @brief Initialize the UART used to talk with the controller. */
     void begin() noexcept
     {
         this->serial->begin(constants::controllerSerial::ARDCOM_SERIAL_BAUD, SERIAL_8N1, constants::controllerSerial::ARDCOM_SERIAL_RX_PIN,
                             constants::controllerSerial::ARDCOM_SERIAL_TX_PIN, false, 5U);
-        this->serial->setTimeout(constants::controllerSerial::ARDCOM_SERIAL_TIMEOUT_MS);
     }
 
-    // --- Main I/O Methods ---
+    void processSerialBuffer();
 
-    void processSerialBuffer();  // Main serial processing function
+    void onMessage(MessageCallback callback);
 
-    void onMessage(MessageCallback callback);  // Register payload callback
+    [[nodiscard]] auto parseDetailsFromReceived(DeviceDetailsSnapshot &outDetails) const -> constants::DeserializeExitCode;
 
-    [[nodiscard]] auto storeDetailsFromReceived() const
-        -> constants::DeserializeExitCode;  // Validate and store last received details payload
+    [[nodiscard]] auto storeDetailsFromReceived() const -> constants::DeserializeExitCode;
 
-    [[nodiscard]] auto storeStateFromReceived() const
-        -> constants::DeserializeExitCode;  // Validate and store last received packed state payload
+    [[nodiscard]] auto storeStateFromReceived() const -> constants::DeserializeExitCode;
 
-    // --- Public Send Methods ---
+    [[nodiscard]] auto sendJson(constants::payloads::StaticType payloadType) -> bool;
 
-    void sendJson(constants::payloads::StaticType payloadType);  // Send a static JSON payload
+    [[nodiscard]] auto sendJson(const JsonDocument &json) -> bool;
 
-    void sendJson(const JsonDocument &json);  // Send a JsonDocument using the current serial codec
+    [[nodiscard]] auto sendJson(const char *jsonString) -> bool;
 
-    /**
-     * @brief Convenience JSON-text overload kept for callers with a
-     *        null-terminated literal.
-     */
-    void sendJson(const char *jsonString);
+    [[nodiscard]] auto sendJson(const char *buffer, std::size_t length) -> bool;
 
-    void sendJson(const char *buffer, std::size_t length);  // Forward a raw payload buffer using the active serial codec
+    [[nodiscard]] auto stageSingleActuatorCommand(std::uint8_t actuatorId, bool state) -> bool;
 
-    [[nodiscard]] auto stageSingleActuatorCommand(std::uint8_t actuatorId, bool state) -> bool;  // Stage a single desired actuator state
+    [[nodiscard]] auto stageDesiredPackedState(const JsonArrayConst &packedBytes) -> bool;
 
-    [[nodiscard]] auto stageDesiredPackedState(const JsonArrayConst &packedBytes) -> bool;  // Stage a packed desired-state snapshot
+    void processPendingActuatorBatch();
 
-    void processPendingActuatorBatch();  // Emit one coalesced SET_STATE after the quiet window
+    void clearPendingActuatorBatch();
 
-    void clearPendingActuatorBatch();  // Drop pending desired-state updates and realign the shadow
+    void reconcileDesiredActuatorStatesFromAuthoritative();
 
-    void reconcileDesiredActuatorStatesFromAuthoritative();  // Reconcile desired-state shadow with authoritative state
+    [[nodiscard]] auto peekPendingActuatorStormDiagnostic(ActuatorStormDiagnostic &outDiagnostic) -> bool;
 
-    [[nodiscard]] auto peekPendingActuatorStormDiagnostic(ActuatorStormDiagnostic &outDiagnostic)
-        -> bool;  // Copy the last dropped unstable-batch diagnostic without clearing it
+    void clearPendingActuatorStormDiagnostic();
 
-    void clearPendingActuatorStormDiagnostic();  // Clear the last dropped unstable-batch diagnostic after the outer bridge has reported it
+    [[nodiscard]] auto triggerFailoverFromReceivedClick() -> constants::DeserializeExitCode;
 
-    [[nodiscard]] auto triggerFailoverFromReceivedClick()
-        -> constants::DeserializeExitCode;  // Create and send a failover from the last received click payload
+    [[nodiscard]] auto getReceivedDoc() const -> const JsonDocument &;
 
-    // --- Getters ---
-
-    [[nodiscard]] auto getReceivedDoc() const -> const JsonDocument &;  // Get the last received JsonDocument
-
-    // --- Utility Methods ---
-
-    [[nodiscard]] auto isConnected() const -> bool;  // Return if attached device is connected
+    [[nodiscard]] auto isConnected() const -> bool;
 };
 
 #endif  // LSH_BRIDGE_COMMUNICATION_CONTROLLER_SERIAL_LINK_HPP

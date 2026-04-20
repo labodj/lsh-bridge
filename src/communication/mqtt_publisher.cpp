@@ -52,6 +52,7 @@ void setMqttClient(AsyncMqttClient *const client)
  * @param jsonDoc the json payload to send.
  * @param topic the topic.
  * @param retain if the message must be retained by MQTT broker.
+ * @param qos MQTT QoS used for the publish call.
  * @return true if message is published.
  * @return false if message isn't published.
  */
@@ -61,19 +62,28 @@ auto sendJson(const JsonDocument &jsonDoc, const char *const topic, bool retain,
     DP("↑ Topic: ", topic, " | Retain: ", retain, " | Json to send: ");
     DPJ(jsonDoc);
 
-    using constants::controllerSerial::RAW_MESSAGE_MAX_SIZE;
+    using constants::controllerSerial::MQTT_PUBLISH_MESSAGE_MAX_SIZE;
 
-    if (mqttClient == nullptr)
+    if (mqttClient == nullptr || topic == nullptr || topic[0] == '\0')
     {
         return false;
     }
 
-    char buffer[RAW_MESSAGE_MAX_SIZE];
+    char buffer[MQTT_PUBLISH_MESSAGE_MAX_SIZE];
 #ifdef CONFIG_MSG_PACK_MQTT
-    const size_t size = serializeMsgPack(jsonDoc, buffer, RAW_MESSAGE_MAX_SIZE);
+    const size_t size = serializeMsgPack(jsonDoc, buffer, MQTT_PUBLISH_MESSAGE_MAX_SIZE);
 #else
-    const size_t size = serializeJson(jsonDoc, buffer, RAW_MESSAGE_MAX_SIZE);
+    const size_t expectedSize = measureJson(jsonDoc);
+    const size_t size = serializeJson(jsonDoc, buffer, MQTT_PUBLISH_MESSAGE_MAX_SIZE);
+    if (size != expectedSize)
+    {
+        return false;
+    }
 #endif  // CONFIG_MSG_PACK_MQTT
+    if (size == 0U)
+    {
+        return false;
+    }
     DPL("Json size: ", size);
     // `publish()` expects a raw byte pointer plus its exact size. `buffer`
     // already contains a contiguous serialized payload in the active codec.
@@ -81,7 +91,7 @@ auto sendJson(const JsonDocument &jsonDoc, const char *const topic, bool retain,
 }
 
 /**
- * @brief Send a static Json to MQTT using default topic.
+ * @brief Send one compile-time pre-serialized static payload to MQTT.
  *
  * @param payloadType type of the json to send.
  * @return true if message has been sent.
@@ -89,7 +99,7 @@ auto sendJson(const JsonDocument &jsonDoc, const char *const topic, bool retain,
  */
 auto sendJson(constants::payloads::StaticType payloadType) -> bool
 {
-    if (mqttClient == nullptr)
+    if (mqttClient == nullptr || MqttTopicsBuilder::mqttOutEventsTopic.empty())
     {
         return false;
     }
@@ -101,7 +111,7 @@ auto sendJson(constants::payloads::StaticType payloadType) -> bool
     constexpr bool useMsgPack = false;
 #endif
 
-    const auto payloadToSend = utils::payloads::get<useMsgPack>(payloadType);
+    const auto payloadToSend = utils::payloads::getMqtt<useMsgPack>(payloadType);
     if (payloadToSend.empty())
     {
         return false;
@@ -109,7 +119,7 @@ auto sendJson(constants::payloads::StaticType payloadType) -> bool
 
     // Static payloads are pre-serialized at compile time, so this path can
     // publish them directly without building a temporary JsonDocument.
-    return static_cast<bool>(mqttClient->publish(MqttTopicsBuilder::mqttOutMiscTopic.c_str(), 1, false,
+    return static_cast<bool>(mqttClient->publish(MqttTopicsBuilder::mqttOutEventsTopic.c_str(), 1, false,
                                                  reinterpret_cast<const char *>(payloadToSend.data()), payloadToSend.size()));
 }
 

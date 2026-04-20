@@ -31,12 +31,25 @@
 #include "constants/configs/virtual_device.hpp"
 
 /**
- * @brief Holds the cached data model for the attached physical device.
- * @details The bridge stores the last validated topology snapshot (device name,
- *          actuator IDs and button IDs) plus the latest authoritative actuator
- *          state. Topology validity and runtime-state validity are tracked
- *          separately so stale state can be invalidated without losing the
- *          bootstrap details snapshot.
+ * @brief Plain validated snapshot of controller topology details.
+ */
+struct DeviceDetailsSnapshot
+{
+    etl::string<constants::virtualDevice::MAX_NAME_LENGTH> name{};                     //!< Validated controller name.
+    etl::vector<std::uint8_t, constants::virtualDevice::MAX_ACTUATORS> actuatorIds{};  //!< Validated logical actuator IDs.
+    etl::vector<std::uint8_t, constants::virtualDevice::MAX_BUTTONS> buttonIds{};      //!< Validated logical button IDs.
+
+    /** @brief Reset the snapshot to an empty invalid state. */
+    void clear() noexcept
+    {
+        name.clear();
+        actuatorIds.clear();
+        buttonIds.clear();
+    }
+};
+
+/**
+ * @brief Holds the cached bridge-side model of the attached physical device.
  */
 class VirtualDevice
 {
@@ -52,7 +65,7 @@ private:
     // building MQTT/Homie topology and mapping state indexes back to logical IDs.
     etl::vector<std::uint8_t, constants::virtualDevice::MAX_ACTUATORS> actuatorIds{};
     etl::vector<std::uint8_t, constants::virtualDevice::MAX_BUTTONS>
-        buttonIds{};  //!< Stores original button IDs for cache-backed DEVICE_DETAILS replies.
+        buttonIds{};  //!< Stores original button IDs for cache-backed `DEVICE_DETAILS` replies.
 
     etl::bitset<constants::virtualDevice::MAX_ACTUATORS> actuatorsState{};  //!< Real-time state of all actuators.
     etl::bitset<constants::virtualDevice::MAX_ACTUATORS>
@@ -72,40 +85,41 @@ public:
 
     // --- Setters ---
 
-    void setDetails(const char *deviceName,
-                    const JsonArrayConst &actuatorIds,
-                    const JsonArrayConst &buttonIds);  // Cache validated topology snapshot
+    void setDetails(const DeviceDetailsSnapshot &details);
 
-    void setStateFromPackedBytes(const JsonArrayConst &packedBytes);  // Update authoritative actuator state from packed bytes
+    void setDetails(const char *deviceName, const JsonArrayConst &actuatorIds, const JsonArrayConst &buttonIds);
 
-    void invalidateRuntimeModel() noexcept;  // Mark runtime state as stale but keep cached topology
+    void setStateFromPackedBytes(const JsonArrayConst &packedBytes);
 
-    // --- Getters ---
+    void invalidateRuntimeModel() noexcept;
 
-    auto getName() const -> const etl::istring &;  // Get cached device name
+    auto getName() const -> const etl::istring &;
 
-    [[nodiscard]] auto hasCachedDetails() const noexcept -> bool;  // Return if validated details are cached
+    [[nodiscard]] auto hasCachedDetails() const noexcept -> bool;
 
-    [[nodiscard]] auto populateDetailsDocument(JsonDocument &doc) const -> bool;  // Populate a JsonDocument with cached details
+    [[nodiscard]] auto populateDetailsDocument(JsonDocument &doc) const -> bool;
 
-    auto getActuatorId(std::uint8_t index) const -> std::uint8_t;  // Get actuator ID by index
+    [[nodiscard]] auto exportDetailsSnapshot(DeviceDetailsSnapshot &out) const noexcept -> bool;
 
-    [[nodiscard]] auto tryGetActuatorIndex(std::uint8_t actuatorId, std::uint8_t &outIndex) const noexcept
-        -> bool;  // Try to resolve an actuator index from its logical ID
+    [[nodiscard]] auto matchesDetails(const DeviceDetailsSnapshot &details) const noexcept -> bool;
 
-    auto getTotalActuators() const noexcept -> std::uint8_t;  // Get total number of cached actuators
+    auto getActuatorId(std::uint8_t index) const -> std::uint8_t;
 
-    auto getTotalButtons() const noexcept -> std::uint8_t;  // Get total number of cached buttons
+    [[nodiscard]] auto tryGetActuatorIndex(std::uint8_t actuatorId, std::uint8_t &outIndex) const noexcept -> bool;
 
-    auto getStateByIndex(std::uint8_t index) const noexcept -> bool;  // Get actuator state by index
+    auto getTotalActuators() const noexcept -> std::uint8_t;
 
-    auto isActuatorDirty(std::uint8_t index) const noexcept -> bool;  // Return if an actuator still needs a Homie state refresh
+    auto getTotalButtons() const noexcept -> std::uint8_t;
 
-    void clearDirtyActuators() noexcept;  // Clear the dirty actuators set
+    auto getStateByIndex(std::uint8_t index) const noexcept -> bool;
 
-    auto isRuntimeSynchronized() const noexcept -> bool;  // Return if runtime model is synchronized with the controller
+    auto isActuatorDirty(std::uint8_t index) const noexcept -> bool;
 
-    auto consumeFullStatePublishPending() noexcept -> bool;  // Return and clear the one-shot full-state publish flag
+    void clearDirtyActuators() noexcept;
+
+    auto isRuntimeSynchronized() const noexcept -> bool;
+
+    auto consumeFullStatePublishPending() noexcept -> bool;
 };
 
 #endif  // LSH_BRIDGE_VIRTUAL_DEVICE_HPP

@@ -23,9 +23,7 @@
 
 #include <Arduino.h>
 
-// Shared flag that remembers whether this module has already opened `Serial`.
-// Both debug and non-debug helpers respect it so repeated calls stay harmless.
-
+/** @brief Shared flag that remembers whether this module has already opened `Serial`. */
 inline bool serialIsActive = false;
 
 #ifdef LSH_DEBUG
@@ -37,29 +35,20 @@ inline bool serialIsActive = false;
 
 inline VaPrint debugPrinter;
 
-/**
- * @brief Debug: Print
- *
- */
+/** @brief Print one debug line fragment without adding a newline. */
 template <typename T, typename... Others> constexpr inline void DP(T first, Others... others)
 {
     debugPrinter.print(first, others...);
 }
 
-/**
- * @brief Debug: Print Line
- *
- */
+/** @brief Print one debug line and terminate it with a newline. */
 template <typename T, typename... Others> constexpr inline void DPL(T first, Others... others)
 {
     debugPrinter.print(first, others...);
-    Serial.println();
+    debugPrinter.println();
 }
 
-/**
- * @brief Debug: Serial Begin
- *
- */
+/** @brief Lazily open the debug serial console when debug logging is enabled. */
 inline void DSB()
 {
     if (!serialIsActive)
@@ -71,20 +60,14 @@ inline void DSB()
     }
 }
 
-/**
- * @brief Non-Debug Serial Begin, not needed when in debug mode
- *
- */
+/** @brief No-op placeholder when debug logging already owns the serial console. */
 #define NDSB
 
-/**
- * @brief Debug: Print Json (even if CONFIG_MSG_PACK has been set)
- *
- */
+/** @brief Print one JSON document to the debug serial console even in MsgPack builds. */
 template <typename T> constexpr inline void DPJ(const T &json)
 {
-    serializeJson(json, Serial);
-    Serial.println();
+    serializeJson(json, debugPrinter.stream());
+    debugPrinter.println();
 }
 
 // Prints the current C++ function signature, which is often the fastest way to
@@ -101,15 +84,12 @@ template <typename T> constexpr inline void DPJ(const T &json)
 #define DPJ(x)
 #define DP_CONTEXT()
 
-/**
- * @brief Non-Debug Serial Begin, turn on Serial when not in debug mode
- *
- */
+/** @brief Lazily open the regular serial console in non-debug builds. */
 inline void NDSB()
 {
     if (!serialIsActive)
     {
-        // Outside debug builds the application may still need a regular Serial
+        // Outside debug builds the application may need a regular Serial
         // console, so `NDSB()` keeps that path available explicitly.
         Serial.begin(500000);
         serialIsActive = true;

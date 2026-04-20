@@ -77,9 +77,12 @@ auto LSHNode::handleSetCommand(const HomieRange &range, const String &value) -> 
 /**
  * @brief Sends the current state of the actuator to its MQTT state topic.
  * @details This function is called to synchronize the MQTT state with the
- *          actuator's actual state held in VirtualDevice.
+ *          actuator's actual state held in `VirtualDevice`.
+ *
+ * @return true if Homie accepted the publish request.
+ * @return false if Homie rejected the publish request.
  */
-void LSHNode::sendState() const
+auto LSHNode::sendState() const -> bool
 {
     DP_CONTEXT();
     DP("↑ ID: ", this->getId());
@@ -89,9 +92,17 @@ void LSHNode::sendState() const
 
     using constants::homie::HOMIE_PROPERTY_ADVERTISE;
 
-    this->setProperty(HOMIE_PROPERTY_ADVERTISE)
-        .overwriteSetter(false)
-        .setQos(1)
-        .setRetained(true)
-        .send(utils::conversions::to_literal(stateToSend));
+    const auto packetId = this->setProperty(HOMIE_PROPERTY_ADVERTISE)
+                              .overwriteSetter(false)
+                              .setQos(1)
+                              .setRetained(true)
+                              .send(utils::conversions::to_literal(stateToSend));
+
+    if (packetId == 0U)
+    {
+        DPL("Homie publish rejected for actuator ID ", this->actuatorId, ".");
+        return false;
+    }
+
+    return true;
 }

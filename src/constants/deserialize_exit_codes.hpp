@@ -56,7 +56,7 @@ enum class DeserializeExitCode
     ERR_UNKNOWN_CLICK_TYPE,                   //!< Click type is unknown
     ERR_LONG_CLICKED_BUTTON_IMPLAUSIBLE,      //!< Received long clicked button not in range (min=0, max=total buttons)
     ERR_NOT_FORWARDED_OTHER_PROBLEM,          //!< Message not forwarded due to another problem
-    ERR_NOT_USEFUL_JSON,                      //!< Arrived Json is not useful right now (maybe we need to config something first)
+    ERR_NOT_USEFUL_JSON,                      //!< Received Json payload is well formed but not actionable in the current bridge phase
     ERR_NO_ACTUATORS,                         //!< No actuators array received
     ERR_ACTUATORS_MISMATCH,                   //!< Received actuators state array size is different than stored total actuators
     ERR_STATE_VALUE_IMPLAUSIBLE,              //!< Received state payload contains non-byte entries

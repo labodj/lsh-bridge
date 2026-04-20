@@ -31,7 +31,7 @@
  */
 namespace timeKeeper
 {
-extern std::uint32_t now;  //!< Cached copy of `millis()` refreshed by the main loop.
+extern std::uint32_t now;
 
 /**
  * @brief Get the time.

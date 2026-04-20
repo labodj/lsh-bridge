@@ -1,10 +1,10 @@
 /**
  * @file    etl_profile.h
  * @author  Jacopo Labardi (labodj)
- * @brief   ETL compile-time profile used by lsh-bridge.
+ * @brief   Defines the default ETL compile-time profile used by lsh-bridge.
  * @details This file provides the default ETL policy used by `lsh-bridge` on
- *          the supported Arduino/PlatformIO targets. ETL still auto-detects
- *          the active compiler and language support through
+ *          the supported Arduino/PlatformIO targets. ETL auto-detects the
+ *          active compiler and language support through
  *          `etl/profiles/auto.h`.
  *
  *          Advanced consumers that need a different ETL setup may define

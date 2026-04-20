@@ -28,12 +28,13 @@
 
 namespace MqttTopicsBuilder
 {
-etl::string<constants::mqtt::MQTT_BASE_TOPIC_LENGTH> mqttBaseTopic{};               //!< MQTT base topic
-etl::string<constants::mqtt::MQTT_MAX_IN_TOPIC_LENGTH> mqttInTopic{};               //!< MQTT input topic
-std::uint32_t mqttInTopicHash = 0;                                                  //!< MQTT input topic DJB2 hash
-etl::string<constants::mqtt::MQTT_MAX_OUT_CONF_TOPIC_LENGTH> mqttOutConfTopic{};    //!< MQTT output config topic
-etl::string<constants::mqtt::MQTT_MAX_OUT_STATE_TOPIC_LENGTH> mqttOutStateTopic{};  //!< MQTT output state topic
-etl::string<constants::mqtt::MQTT_MAX_OUT_MISC_TOPIC_LENGTH> mqttOutMiscTopic{};    //!< MQTT output miscellaneous topic
+etl::string<constants::mqtt::MQTT_BASE_TOPIC_LENGTH> mqttBaseTopic{};                 //!< MQTT base topic
+etl::string<constants::mqtt::MQTT_MAX_IN_TOPIC_LENGTH> mqttInTopic{};                 //!< MQTT input topic
+std::uint32_t mqttInTopicHash = 0;                                                    //!< MQTT input topic DJB2 hash
+etl::string<constants::mqtt::MQTT_MAX_OUT_CONF_TOPIC_LENGTH> mqttOutConfTopic{};      //!< MQTT output config topic
+etl::string<constants::mqtt::MQTT_MAX_OUT_STATE_TOPIC_LENGTH> mqttOutStateTopic{};    //!< MQTT output state topic
+etl::string<constants::mqtt::MQTT_MAX_OUT_EVENTS_TOPIC_LENGTH> mqttOutEventsTopic{};  //!< MQTT output controller-backed events topic
+etl::string<constants::mqtt::MQTT_MAX_OUT_BRIDGE_TOPIC_LENGTH> mqttOutBridgeTopic{};  //!< MQTT output bridge-local runtime topic
 
 /**
  * @brief Builds MQTT topics.
@@ -48,16 +49,18 @@ void updateMqttTopics(const char *const deviceName)
     DPL("↑ Device name: ", deviceName);
 
     using constants::mqtt::MQTT_TOPIC_BASE;
+    using constants::mqtt::MQTT_TOPIC_BRIDGE;
     using constants::mqtt::MQTT_TOPIC_CONF;
+    using constants::mqtt::MQTT_TOPIC_EVENTS;
     using constants::mqtt::MQTT_TOPIC_INPUT;
-    using constants::mqtt::MQTT_TOPIC_MISC;
     using constants::mqtt::MQTT_TOPIC_STATE;
 
     mqttBaseTopic.clear();
     mqttInTopic.clear();
     mqttOutConfTopic.clear();
     mqttOutStateTopic.clear();
-    mqttOutMiscTopic.clear();
+    mqttOutEventsTopic.clear();
+    mqttOutBridgeTopic.clear();
 
     mqttBaseTopic.append(MQTT_TOPIC_BASE).append("/").append(deviceName).append("/");
     DPL("MQTT base topic: ", mqttBaseTopic.c_str());
@@ -76,8 +79,11 @@ void updateMqttTopics(const char *const deviceName)
     mqttOutStateTopic.append(mqttBaseTopic).append(MQTT_TOPIC_STATE);
     DPL("MQTT output state topic: ", mqttOutStateTopic.c_str());
 
-    mqttOutMiscTopic.append(mqttBaseTopic).append(MQTT_TOPIC_MISC);
-    DPL("MQTT output misc topic: ", mqttOutMiscTopic.c_str());
+    mqttOutEventsTopic.append(mqttBaseTopic).append(MQTT_TOPIC_EVENTS);
+    DPL("MQTT output events topic: ", mqttOutEventsTopic.c_str());
+
+    mqttOutBridgeTopic.append(mqttBaseTopic).append(MQTT_TOPIC_BRIDGE);
+    DPL("MQTT output bridge topic: ", mqttOutBridgeTopic.c_str());
 }
 
 }  // namespace MqttTopicsBuilder

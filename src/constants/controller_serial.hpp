@@ -32,16 +32,163 @@ namespace constants
 {
 namespace controllerSerial
 {
+namespace detail
+{
+/** @brief Return the MsgPack size needed to encode one unsigned integer up to `maxValue`. */
+constexpr auto msgPackUnsignedSize(std::uint16_t maxValue) -> std::uint16_t
+{
+    if (maxValue <= 0x7FU)
+    {
+        return 1U;
+    }
+
+    if (maxValue <= 0xFFU)
+    {
+        return 2U;
+    }
+
+    return 3U;
+}
+
+/** @brief Return the MsgPack prefix size needed for one array with `elementCount` elements. */
+constexpr auto msgPackArrayPrefixSize(std::uint16_t elementCount) -> std::uint16_t
+{
+    return elementCount <= 15U ? 1U : 3U;
+}
+
+/** @brief Return the MsgPack size needed to encode one string of `stringLength` bytes. */
+constexpr auto msgPackStringSize(std::uint16_t stringLength) -> std::uint16_t
+{
+    if (stringLength <= 31U)
+    {
+        return static_cast<std::uint16_t>(1U + stringLength);
+    }
+
+    if (stringLength <= 0xFFU)
+    {
+        return static_cast<std::uint16_t>(2U + stringLength);
+    }
+
+    return static_cast<std::uint16_t>(3U + stringLength);
+}
+}  // namespace detail
+
 /**
- * @brief Stack buffer size reserved for one complete raw controller frame.
- * @details Sized for the longest supported DEVICE_DETAILS payload plus the
- *          terminators required by the text transport.
+ * @brief Worst-case raw JSON bytes for one complete controller `DEVICE_DETAILS` payload.
+ * @details JSON serial builds assemble newline-delimited text frames from this
+ *          shape:
  *          Example payload:
  *          `{"p":1,"v":2,"n":"name","a":[255,255,...],"b":[255,255,...]}`
  *          Formula: `34 + NAME_LEN + (MAX_ACT * 4) + (MAX_BTN * 4) + 2`.
  */
-constexpr std::uint16_t RAW_MESSAGE_MAX_SIZE =
+constexpr std::uint16_t JSON_SERIAL_MESSAGE_MAX_SIZE =
     std::bit_ceil(34U + virtualDevice::MAX_NAME_LENGTH + (virtualDevice::MAX_ACTUATORS * 4) + (virtualDevice::MAX_BUTTONS * 4) + 2U);
+
+/**
+ * @brief Worst-case deframed MsgPack bytes for one complete controller `DEVICE_DETAILS` payload.
+ * @details The serial framing bytes are intentionally excluded because the
+ *          bridge deframes incrementally and only stores the pure MsgPack
+ *          payload. Keys are one-byte protocol strings and every numeric field
+ *          accepted from the controller is bounded to `uint8_t`.
+ */
+constexpr std::uint16_t MSGPACK_SERIAL_MESSAGE_MAX_SIZE = std::bit_ceil(
+    1U +                                 // root map with 5 key/value pairs
+    (5U * 2U) +                          // one-byte string keys: "p", "v", "n", "a", "b"
+    detail::msgPackUnsignedSize(255U) +  // payload ID
+    detail::msgPackUnsignedSize(255U) +  // protocol major
+    detail::msgPackStringSize(virtualDevice::MAX_NAME_LENGTH) + detail::msgPackArrayPrefixSize(virtualDevice::MAX_ACTUATORS) +
+    (virtualDevice::MAX_ACTUATORS * detail::msgPackUnsignedSize(255U)) + detail::msgPackArrayPrefixSize(virtualDevice::MAX_BUTTONS) +
+    (virtualDevice::MAX_BUTTONS * detail::msgPackUnsignedSize(255U)));
+
+/**
+ * @brief Buffer size reserved for one complete inbound controller payload.
+ * @details JSON serial builds use a newline-terminated text buffer. MsgPack
+ *          serial builds use the same storage for the deframed binary payload.
+ */
+#ifdef CONFIG_MSG_PACK_ARDUINO
+constexpr std::uint16_t SERIAL_RX_BUFFER_SIZE = MSGPACK_SERIAL_MESSAGE_MAX_SIZE;
+#else
+constexpr std::uint16_t SERIAL_RX_BUFFER_SIZE = JSON_SERIAL_MESSAGE_MAX_SIZE;
+#endif
+
+/**
+ * @brief Number of packed bytes in one inbound MQTT `SET_STATE` command.
+ */
+constexpr std::uint16_t MQTT_PACKED_STATE_BYTES = (virtualDevice::MAX_ACTUATORS + 7U) / 8U;
+
+/**
+ * @brief Worst-case raw JSON bytes for one supported inbound MQTT command.
+ * @details The bridge accepts only shallow control payloads from MQTT. The
+ *          largest supported shape is either the packed `SET_STATE` command
+ *          or one click payload carrying `p`, `t`, `i` and `c`.
+ */
+constexpr std::uint16_t JSON_MQTT_COMMAND_MESSAGE_MAX_SIZE = std::bit_ceil(16U + (MQTT_PACKED_STATE_BYTES * 4U));
+
+/**
+ * @brief Worst-case raw JSON bytes for one inbound MQTT click command.
+ * @details Covers payloads shaped like
+ *          `{"p":255,"t":255,"i":255,"c":255}`.
+ */
+constexpr std::uint16_t JSON_MQTT_CLICK_MESSAGE_MAX_SIZE = 32U;
+
+/**
+ * @brief Worst-case raw MsgPack bytes for one supported inbound MQTT command.
+ * @details The largest supported command remains the packed `SET_STATE`
+ *          payload. Keys are the one-byte protocol strings `"p"` and `"s"`.
+ */
+constexpr std::uint16_t MSGPACK_MQTT_COMMAND_MESSAGE_MAX_SIZE =
+    std::bit_ceil(1U +                                 // root map with 2 key/value pairs
+                  (2U * 2U) +                          // one-byte string keys: "p", "s"
+                  detail::msgPackUnsignedSize(255U) +  // payload ID
+                  detail::msgPackArrayPrefixSize(MQTT_PACKED_STATE_BYTES) + (MQTT_PACKED_STATE_BYTES * detail::msgPackUnsignedSize(255U)));
+
+/**
+ * @brief Worst-case raw MsgPack bytes for one inbound MQTT click command.
+ * @details Covers payloads shaped like
+ *          `{"p":17,"t":255,"i":255,"c":255}` in logical form.
+ */
+constexpr std::uint16_t MSGPACK_MQTT_CLICK_MESSAGE_MAX_SIZE = std::bit_ceil(1U + (4U * 2U) + (4U * detail::msgPackUnsignedSize(255U)));
+
+/**
+ * @brief Buffer size reserved for one queued inbound MQTT command payload.
+ * @details This queue never stores topology publishes. It only holds
+ *          controller/service commands awaiting parsing in the main loop.
+ */
+constexpr std::uint16_t MQTT_COMMAND_MESSAGE_MAX_SIZE = []() constexpr -> std::uint16_t
+{
+    constexpr std::uint16_t jsonMax = JSON_MQTT_COMMAND_MESSAGE_MAX_SIZE < JSON_MQTT_CLICK_MESSAGE_MAX_SIZE
+                                          ? JSON_MQTT_CLICK_MESSAGE_MAX_SIZE
+                                          : JSON_MQTT_COMMAND_MESSAGE_MAX_SIZE;
+    constexpr std::uint16_t msgPackMax = MSGPACK_MQTT_COMMAND_MESSAGE_MAX_SIZE < MSGPACK_MQTT_CLICK_MESSAGE_MAX_SIZE
+                                             ? MSGPACK_MQTT_CLICK_MESSAGE_MAX_SIZE
+                                             : MSGPACK_MQTT_COMMAND_MESSAGE_MAX_SIZE;
+    return jsonMax < msgPackMax ? msgPackMax : jsonMax;
+}();
+
+/**
+ * @brief Buffer size reserved for one outbound MQTT publish payload.
+ * @details Outbound publishes include retained topology snapshots, so this
+ *          buffer must still fit the worst-case `DEVICE_DETAILS` payload in the
+ *          active MQTT codec.
+ */
+#ifdef CONFIG_MSG_PACK_MQTT
+constexpr std::uint16_t MQTT_PUBLISH_MESSAGE_MAX_SIZE = MSGPACK_SERIAL_MESSAGE_MAX_SIZE;
+#else
+constexpr std::uint16_t MQTT_PUBLISH_MESSAGE_MAX_SIZE = JSON_SERIAL_MESSAGE_MAX_SIZE;
+#endif
+
+/**
+ * @brief Maximum raw serial bytes drained by one `processSerialBuffer()` call.
+ * @details This fairness budget bounds how much malformed, partial or noisy
+ *          UART traffic one bridge loop iteration may consume before control
+ *          returns to MQTT, Homie and bootstrap work.
+ */
+#ifdef CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP
+constexpr std::uint16_t SERIAL_MAX_RX_BYTES_PER_LOOP = CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP;
+#else
+constexpr std::uint16_t SERIAL_MAX_RX_BYTES_PER_LOOP = SERIAL_RX_BUFFER_SIZE;
+#endif
+static_assert(SERIAL_MAX_RX_BYTES_PER_LOOP > 0U, "SERIAL_MAX_RX_BYTES_PER_LOOP must be greater than zero.");
 
 /**
  * @brief Memory pool size for the persistent document that stores received device details.
