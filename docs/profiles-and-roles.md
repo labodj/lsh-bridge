@@ -175,9 +175,19 @@ The current public LSH stack can be described like this:
 In this reference stack:
 
 - serial `PING` is used by the bridge to assess controller reachability
-- MQTT `PING` is used by automation peers to assess bridge reachability
+- MQTT device-topic `PING` is used by automation peers to assess the immediate
+  MQTT peer only when the bridge has a live and synchronized controller path
+- MQTT service-topic `PING` is used by automation peers to assess bridge
+  reachability and returns bridge-local runtime status
 - a bridge-local service-topic `BOOT` can trigger a controller resync without
   redefining `BOOT` as a mandatory end-to-end traversal command
+
+In the current MQTT profile, the topic split is explicit:
+
+- `LSH/<device>/events` carries controller-backed runtime traffic
+- `LSH/<device>/bridge` carries bridge-local runtime traffic
+
+That topic split is a profile choice. The base wire contract remains unchanged.
 
 Those are **profile choices**, not mandatory rules for all LSH implementations.
 

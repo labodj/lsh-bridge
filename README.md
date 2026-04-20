@@ -83,7 +83,7 @@ Keep these terms distinct:
 The LSH logical payloads are transport-agnostic. Transport behavior is documented here because it affects interoperability between repositories:
 
 - JSON over serial: newline-delimited
-- MsgPack over serial: raw MsgPack payload
+- MsgPack over serial: `END + escaped(payload) + END`, with `END = 0xC0`, `ESC = 0xDB`, `ESC_END = 0xDC`, `ESC_ESC = 0xDD`
 - MQTT JSON: raw JSON payload
 - MQTT MsgPack: raw MsgPack payload
 
