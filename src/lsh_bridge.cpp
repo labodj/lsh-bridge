@@ -20,8 +20,8 @@
 
 #include "lsh_bridge.hpp"
 
-#include <cstdint>
 #include <cstring>
+#include <cstdint>
 #include <utility>
 
 #include <Arduino.h>
@@ -31,6 +31,8 @@
 #include <etl/bitset.h>
 #include <etl/vector.h>
 
+#include "bridge_runtime_diagnostics.hpp"
+#include "bridge_runtime_sync.hpp"
 #include "communication/controller_serial_link.hpp"
 #include "communication/mqtt_topics_builder.hpp"
 #include "communication/mqtt_publisher.hpp"
@@ -44,6 +46,7 @@
 #include "debug/debug.hpp"
 #include "details_cache_store.hpp"
 #include "lsh_node.hpp"
+#include "mqtt_command_queue.hpp"
 #include "utils/json_scalars.hpp"
 #include "utils/time_keeper.hpp"
 #include "virtual_device.hpp"
@@ -60,33 +63,47 @@ using constants::DeserializeExitCode;
  *          into the next byte.
  */
 constexpr std::uint8_t kPackedBitMask[8] = {0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U};
-
-static constexpr const std::uint16_t kBridgeDiagnosticDocSize =
-    192U;  //!< Document size used for bridge-local runtime payloads published on `bridge`.
-static constexpr const std::uint16_t kBridgeDiagnosticCounterMax =
-    0xFFFFU;                                                     //!< Saturation cap for diagnostic counters accumulated by the runtime.
-constexpr char kBridgeEventKey[] = "event";                      //!< Field name that identifies the bridge-local runtime event type.
-constexpr char kDiagnosticEvent[] = "diagnostic";                //!< Event name emitted for bridge-local diagnostics.
-constexpr char kServicePingReplyEvent[] = "service_ping_reply";  //!< Event name emitted when the bridge answers a service-level ping probe.
-constexpr char kBridgeDiagnosticKindKey[] = "kind";              //!< Field name that identifies the specific diagnostic kind.
-constexpr char kPendingDurationMsKey[] = "pending_ms";  //!< Field name that reports how long an unstable actuator batch stayed open.
-constexpr char kMutationCountKey[] =
-    "mutation_count";  //!< Field name that reports how many command changes were merged into one dropped batch.
-constexpr char kDroppedDeviceCommandsKey[] =
-    "dropped_device_commands";  //!< Field name that reports how many device-topic MQTT commands were dropped because the queue was full.
-constexpr char kDroppedServiceCommandsKey[] =
-    "dropped_service_commands";  //!< Field name that reports how many service-topic MQTT commands were dropped because the queue was full.
-constexpr char kControllerConnectedKey[] =
-    "controller_connected";  //!< Field name that reports whether the bridge currently sees the controller link as alive.
-constexpr char kRuntimeSynchronizedKey[] =
-    "runtime_synchronized";  //!< Field name that reports whether the bridge runtime cache is synchronized with the controller.
-constexpr char kBootstrapPhaseKey[] = "bootstrap_phase";  //!< Field name that reports the current bridge bootstrap phase.
-constexpr char kActuatorStormDroppedDiagnostic[] =
-    "actuator_command_storm_dropped";  //!< Diagnostic value emitted when the bridge discards an actuator batch that never became stable.
-constexpr char kMqttQueueOverflowDiagnostic[] =
-    "mqtt_queue_overflow";  //!< Diagnostic value emitted when MQTT callbacks outpace the bridge queue.
 constexpr char kTopologyChangedDiagnostic[] =
     "topology_changed";  //!< Diagnostic value emitted when the controller reports a topology different from the cached one.
+constexpr std::uint16_t kTopologyChangedDiagnosticGraceMs =
+    150U;  //!< Short grace window that gives the MQTT client one chance to flush `topology_changed` before rebooting.
+
+/**
+ * @brief Validate one MQTT-originated network click command before forwarding it to the controller.
+ *
+ * @param commandDocument decoded MQTT payload.
+ * @param outClickType destination click type byte written only on success.
+ * @param outClickableId destination clickable ID written only on success.
+ * @param outCorrelationId destination correlation ID written only on success.
+ * @return true if every scalar is present and semantically valid for the controller protocol.
+ * @return false otherwise.
+ */
+[[nodiscard]] auto validateInboundNetworkClickCommand(const JsonDocument &commandDocument,
+                                                      std::uint8_t &outClickType,
+                                                      std::uint8_t &outClickableId,
+                                                      std::uint8_t &outCorrelationId) -> bool
+{
+    using namespace lsh::bridge::protocol;
+
+    if (!utils::json::tryGetUint8Scalar(commandDocument[KEY_TYPE], outClickType) ||
+        !utils::json::tryGetUint8Scalar(commandDocument[KEY_ID], outClickableId) ||
+        !utils::json::tryGetUint8Scalar(commandDocument[KEY_CORRELATION_ID], outCorrelationId))
+    {
+        return false;
+    }
+
+    switch (static_cast<ProtocolClickType>(outClickType))
+    {
+    case ProtocolClickType::LONG:
+    case ProtocolClickType::SUPER_LONG:
+        break;
+
+    default:
+        return false;
+    }
+
+    return outClickableId != 0U && outCorrelationId != 0U;
+}
 
 /**
  * @brief Resolve the UART used by the bridge runtime.
@@ -141,48 +158,13 @@ public:
      */
     enum class TypedCommandResult : std::uint8_t
     {
-        Handled,      //!< The bridge accepted and handled the command.
-        Unsupported,  //!< The bridge does not interpret this command type.
-        Invalid       //!< The command type is known, but this concrete payload is invalid.
+        Handled,        //!< The bridge accepted and handled the command.
+        Unsupported,    //!< The bridge does not interpret this command type.
+        Invalid,        //!< The command type is known, but this concrete payload is invalid.
+        DeliveryFailed  //!< The bridge recognized the command, but could not deliver the resulting side effect.
     };
 
-    /**
-     * @brief Distinguishes the MQTT topic family that produced an inbound
-     * payload.
-     */
-    enum class MqttCommandSource : std::uint8_t
-    {
-        Device,  //!< Device-scoped command topic.
-        Service  //!< Device-agnostic service topic.
-    };
-
-    /**
-     * @brief Tracks how far the bridge progressed in the controller sync flow.
-     * @details The bridge may already be online while it sits in one of the
-     *          waiting states. The controller remains authoritative; the bridge
-     *          simply uses the phase to decide which request is safe and useful
-     *          to send next.
-     */
-    enum class BootstrapPhase : std::uint8_t
-    {
-        WAITING_FOR_DETAILS,               //!< The bridge needs a fresh authoritative `DEVICE_DETAILS` snapshot.
-        WAITING_FOR_STATE,                 //!< Topology is known, but the first fresh `STATE` frame has not arrived yet.
-        SYNCED,                            //!< Topology and runtime state are both aligned with the controller.
-        TOPOLOGY_MIGRATION_PENDING_REBOOT  //!< A different topology was received and cached; the bridge waits to reboot cleanly.
-    };
-
-    /**
-     * @brief Stores one MQTT payload until the loop is ready to process it.
-     * @details MQTT callbacks can fire while the serial path is busy. The bridge
-     *          therefore copies complete MQTT frames into a small fixed queue and
-     *          drains that queue from the main loop with its own fairness policy.
-     */
-    struct QueuedMqttCommand
-    {
-        MqttCommandSource source = MqttCommandSource::Device;
-        std::uint16_t length = 0U;
-        std::uint8_t payload[constants::controllerSerial::MQTT_COMMAND_MESSAGE_MAX_SIZE]{};
-    };
+    using BootstrapPhase = runtime::BootstrapPhase;
 
     explicit Impl(BridgeOptions bridgeOptions) :
         options(std::move(bridgeOptions)), serial(resolveSerial(options.serial)), controllerSerialLink(serial, virtualDevice)
@@ -194,12 +176,19 @@ public:
     bool isStarted = false;  //!< True after `begin()` has fully wired serial, Homie and callbacks.
     BootstrapPhase bootstrapPhase = BootstrapPhase::WAITING_FOR_DETAILS;  //!< Current high-level controller sync phase.
     bool bootstrapRequestDue = true;                                      //!< True when the next bootstrap request may be sent immediately.
-    bool hasPendingTopologySave = false;        //!< True while a changed topology still has to be persisted to NVS.
-    bool isAuthoritativeStateDirty = false;     //!< True after fresh controller state arrived but is not yet mirrored to MQTT/Homie.
-    bool canServeCachedStateRequests = false;   //!< True only after this MQTT session has already seen one fresh controller-backed state.
-    bool isControllerConnected = false;         //!< Last known controller connectivity bit, used to detect link transitions.
-    std::uint32_t lastBootstrapRequestMs = 0U;  //!< Real-time timestamp of the last `ASK_DETAILS` or `ASK_STATE`.
-    std::uint32_t lastTopologySaveAttemptMs = 0U;       //!< Real-time timestamp of the last deferred NVS save attempt.
+    bool hasPendingTopologySave = false;       //!< True while a changed topology still has to be persisted to NVS.
+    bool isAuthoritativeStateDirty = false;    //!< True after fresh controller state arrived but is not yet mirrored to MQTT/Homie.
+    bool canServeCachedStateRequests = false;  //!< True only after this MQTT session has already seen one fresh controller-backed state.
+    bool isControllerConnected = false;        //!< Last known controller connectivity bit, used to detect link transitions.
+    bool mqttResyncPending = false;  //!< True while MQTT-side resync still needs another retry after reconnect or publish refusal.
+    bool topologyChangedDiagnosticPending =
+        false;                                   //!< True while `topology_changed` still needs one best-effort MQTT publish before reboot.
+    std::uint32_t lastBootstrapRequestMs = 0U;   //!< Real-time timestamp of the last `ASK_DETAILS` or `ASK_STATE`.
+    std::uint32_t lastMqttResyncAttemptMs = 0U;  //!< Real-time timestamp of the last autonomous MQTT-side resync attempt.
+    std::uint32_t lastTopologySaveAttemptMs = 0U;  //!< Real-time timestamp of the last deferred NVS save attempt.
+    std::uint32_t topologyRebootPendingSinceMs =
+        0U;  //!< Real-time timestamp of the successful topology save that started the reboot window.
+    std::uint32_t topologyDiagnosticAcceptedMs = 0U;    //!< Real-time timestamp of the accepted `topology_changed` MQTT publish, if any.
     std::uint32_t lastAuthoritativeStateUpdateMs = 0U;  //!< Real-time timestamp of the latest accepted authoritative state frame.
     etl::vector<LSHNode, constants::virtualDevice::MAX_ACTUATORS> homieNodes{};
     DeviceDetailsSnapshot pendingTopologyDetails{};  //!< Validated topology waiting to be persisted before a controlled reboot.
@@ -208,13 +197,7 @@ public:
     ControllerSerialLink controllerSerialLink;
     AsyncMqttClient *mqttClient = nullptr;
     AsyncMqttClient *mqttMessageBoundClient = nullptr;
-    QueuedMqttCommand mqttCommandQueue[constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY]{};
-    portMUX_TYPE mqttCommandQueueMux = portMUX_INITIALIZER_UNLOCKED;
-    std::uint8_t mqttCommandQueueHead = 0U;
-    std::uint8_t mqttCommandQueueTail = 0U;
-    std::uint8_t mqttCommandQueueCount = 0U;
-    std::uint16_t droppedDeviceMqttCommandCount = 0U;
-    std::uint16_t droppedServiceMqttCommandCount = 0U;
+    MqttCommandQueue mqttCommandQueue{};
 
     void configureHomie() const
     {
@@ -316,23 +299,7 @@ public:
      */
     [[nodiscard]] auto bootstrapPhaseName() const -> const char *
     {
-        switch (bootstrapPhase)
-        {
-        case BootstrapPhase::WAITING_FOR_DETAILS:
-            return "waiting_details";
-
-        case BootstrapPhase::WAITING_FOR_STATE:
-            return "waiting_state";
-
-        case BootstrapPhase::SYNCED:
-            return "synced";
-
-        case BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT:
-            return "topology_migration_pending_reboot";
-
-        default:
-            return "waiting_details";
-        }
+        return runtime::bootstrapPhaseName(bootstrapPhase);
     }
 
     /**
@@ -341,9 +308,7 @@ public:
      */
     void clearPendingRuntimeState()
     {
-        controllerSerialLink.clearPendingActuatorBatch();
-        isAuthoritativeStateDirty = false;
-        canServeCachedStateRequests = false;
+        runtime::clearPendingRuntimeState(controllerSerialLink, isAuthoritativeStateDirty, canServeCachedStateRequests);
     }
 
     /**
@@ -353,8 +318,7 @@ public:
      */
     void scheduleBootstrapRequestNow()
     {
-        bootstrapRequestDue = true;
-        lastBootstrapRequestMs = 0U;
+        runtime::scheduleBootstrapRequestNow(bootstrapRequestDue, lastBootstrapRequestMs);
     }
 
     /**
@@ -365,10 +329,8 @@ public:
      */
     void enterWaitingForDetails()
     {
-        clearPendingRuntimeState();
-        virtualDevice.invalidateRuntimeModel();
-        bootstrapPhase = BootstrapPhase::WAITING_FOR_DETAILS;
-        scheduleBootstrapRequestNow();
+        runtime::enterWaitingForDetails(controllerSerialLink, virtualDevice, isAuthoritativeStateDirty, canServeCachedStateRequests,
+                                        bootstrapPhase, bootstrapRequestDue, lastBootstrapRequestMs);
     }
 
     /**
@@ -381,10 +343,8 @@ public:
      */
     void enterWaitingForState()
     {
-        clearPendingRuntimeState();
-        virtualDevice.invalidateRuntimeModel();
-        bootstrapPhase = BootstrapPhase::WAITING_FOR_STATE;
-        scheduleBootstrapRequestNow();
+        runtime::enterWaitingForState(controllerSerialLink, virtualDevice, isAuthoritativeStateDirty, canServeCachedStateRequests,
+                                      bootstrapPhase, bootstrapRequestDue, lastBootstrapRequestMs);
     }
 
     /**
@@ -400,12 +360,9 @@ public:
      */
     void stageTopologyMigration(const DeviceDetailsSnapshot &details)
     {
-        clearPendingRuntimeState();
-        virtualDevice.invalidateRuntimeModel();
-        pendingTopologyDetails = details;
-        hasPendingTopologySave = true;
-        lastTopologySaveAttemptMs = 0U;
-        bootstrapPhase = BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT;
+        runtime::stageTopologyMigration(controllerSerialLink, virtualDevice, pendingTopologyDetails, hasPendingTopologySave,
+                                        isAuthoritativeStateDirty, canServeCachedStateRequests, details, lastTopologySaveAttemptMs,
+                                        bootstrapPhase);
     }
 
     /**
@@ -443,48 +400,107 @@ public:
      */
     void requestAuthoritativeStateRefresh()
     {
-        enterWaitingForState();
+        runtime::requestAuthoritativeStateRefresh(controllerSerialLink, virtualDevice, isAuthoritativeStateDirty,
+                                                  canServeCachedStateRequests, bootstrapPhase, bootstrapRequestDue, lastBootstrapRequestMs);
+    }
+
+    /**
+     * @brief Arm the next MQTT-side resync attempt for the earliest safe loop.
+     * @details This retry loop is intentionally independent from the controller
+     *          bootstrap state machine. It exists to recover retained MQTT
+     *          publishes and subscriptions after `MQTT_READY` without assuming
+     *          that the controller itself needs another bootstrap request.
+     */
+    void scheduleMqttResyncNow()
+    {
+        mqttResyncPending = true;
+        lastMqttResyncAttemptMs = 0U;
     }
 
     /**
      * @brief Re-synchronizes the MQTT-side peer without tearing down the whole
      * bridge.
      */
-    void softResyncMqttPeer()
+    [[nodiscard]] auto softResyncMqttPeer() -> bool
     {
         if (!virtualDevice.hasCachedDetails())
         {
             canServeCachedStateRequests = false;
             bootstrapPhase = BootstrapPhase::WAITING_FOR_DETAILS;
             scheduleBootstrapRequestNow();
-            return;
+            mqttResyncPending = false;
+            return true;
         }
 
         if (!publishCachedDetails())
         {
             canServeCachedStateRequests = false;
-            return;
+            mqttResyncPending = true;
+            return false;
         }
 
         const bool controllerStateUsable = virtualDevice.isRuntimeSynchronized() && controllerSerialLink.isConnected();
         if (controllerStateUsable)
         {
-            canServeCachedStateRequests = publishAuthoritativeLshState();
-            return;
+            if (!publishAuthoritativeLshState())
+            {
+                canServeCachedStateRequests = false;
+                mqttResyncPending = true;
+                return false;
+            }
+
+            const bool homiePublished = publishAllHomieNodeStates();
+            canServeCachedStateRequests = homiePublished;
+            mqttResyncPending = !homiePublished;
+            return homiePublished;
         }
 
         canServeCachedStateRequests = false;
         virtualDevice.invalidateRuntimeModel();
+        mqttResyncPending = false;
 
         if (bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
         {
             scheduleBootstrapRequestNow();
-            return;
+            return true;
         }
 
         if (bootstrapPhase != BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
         {
             enterWaitingForState();
+        }
+        return true;
+    }
+
+    /**
+     * @brief Retry MQTT-side resynchronization after reconnect or publish refusal.
+     * @details This helper retries subscriptions plus retained `conf` / `state`
+     *          republishes at a slow fixed cadence. It deliberately does not
+     *          touch controller bootstrap state unless the cache itself has
+     *          become unusable.
+     */
+    void processPendingMqttResync()
+    {
+        if (!mqttResyncPending || !Homie.isConnected())
+        {
+            return;
+        }
+
+        const auto now = timeKeeper::getRealTime();
+        if (lastMqttResyncAttemptMs != 0U && (now - lastMqttResyncAttemptMs) < constants::runtime::BOOTSTRAP_REQUEST_INTERVAL_MS)
+        {
+            return;
+        }
+
+        lastMqttResyncAttemptMs = now;
+        if (!updateMqttClient() || !subscribeMqttTopics())
+        {
+            return;
+        }
+
+        if (softResyncMqttPeer())
+        {
+            mqttResyncPending = false;
         }
     }
 
@@ -495,111 +511,9 @@ public:
     void refreshControllerConnectivity()
     {
         const bool isConnectedNow = controllerSerialLink.isConnected();
-        if (isConnectedNow == isControllerConnected)
-        {
-            return;
-        }
-
-        isControllerConnected = isConnectedNow;
-        if (!isConnectedNow)
-        {
-            // Once serial connectivity is lost, any cached runtime state may be stale.
-            // Keep topology, but require a fresh authoritative state before serving
-            // cached answers or translating actuator writes again.
-            clearPendingRuntimeState();
-            virtualDevice.invalidateRuntimeModel();
-            if (bootstrapPhase != BootstrapPhase::WAITING_FOR_DETAILS &&
-                bootstrapPhase != BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
-            {
-                bootstrapPhase = BootstrapPhase::WAITING_FOR_STATE;
-                scheduleBootstrapRequestNow();
-            }
-            return;
-        }
-
-        if (bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
-        {
-            scheduleBootstrapRequestNow();
-            return;
-        }
-
-        if (bootstrapPhase == BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
-        {
-            return;
-        }
-
-        if (!virtualDevice.isRuntimeSynchronized())
-        {
-            // The controller came back while the bridge considers the runtime
-            // model stale, so ask immediately for a new authoritative state frame.
-            requestAuthoritativeStateRefresh();
-        }
-    }
-
-    /**
-     * @brief Copies one complete MQTT frame into the fixed bridge-side queue.
-     * @details The MQTT callback may run while the serial path is busy. The
-     *          bridge therefore keeps the callback short: it validates the frame,
-     *          copies it into a ring buffer under a critical section, and lets the
-     *          main loop parse it later.
-     */
-    [[nodiscard]] auto enqueueMqttCommand(MqttCommandSource source, const char *payload, std::size_t payloadLength) -> bool
-    {
-        if (payload == nullptr || payloadLength == 0U || payloadLength > constants::controllerSerial::MQTT_COMMAND_MESSAGE_MAX_SIZE)
-        {
-            return false;
-        }
-
-        bool wasQueued = false;
-        portENTER_CRITICAL(&mqttCommandQueueMux);
-        if (mqttCommandQueueCount < constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY)
-        {
-            auto &slot = mqttCommandQueue[mqttCommandQueueTail];
-            slot.source = source;
-            std::memcpy(slot.payload, payload, payloadLength);
-            slot.length = static_cast<std::uint16_t>(payloadLength);
-            mqttCommandQueueTail = static_cast<std::uint8_t>((mqttCommandQueueTail + 1U) % constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY);
-            ++mqttCommandQueueCount;
-            wasQueued = true;
-        }
-        portEXIT_CRITICAL(&mqttCommandQueueMux);
-
-        return wasQueued;
-    }
-
-    /**
-     * @brief Pops the oldest queued MQTT frame from the fixed ring buffer.
-     * @details Head/tail/count are protected by `mqttCommandQueueMux` because the
-     *          callback path and the main loop can touch the queue concurrently.
-     */
-    [[nodiscard]] auto dequeueMqttCommand(QueuedMqttCommand &outCommand) -> bool
-    {
-        bool wasDequeued = false;
-        portENTER_CRITICAL(&mqttCommandQueueMux);
-        if (mqttCommandQueueCount > 0U)
-        {
-            outCommand = mqttCommandQueue[mqttCommandQueueHead];
-            mqttCommandQueueHead = static_cast<std::uint8_t>((mqttCommandQueueHead + 1U) % constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY);
-            --mqttCommandQueueCount;
-            wasDequeued = true;
-        }
-        portEXIT_CRITICAL(&mqttCommandQueueMux);
-
-        return wasDequeued;
-    }
-
-    /**
-     * @brief Drops every queued MQTT frame.
-     * @details Used when MQTT disconnects so the bridge does not replay commands
-     *          captured before the next MQTT session starts.
-     */
-    void clearQueuedMqttCommands()
-    {
-        portENTER_CRITICAL(&mqttCommandQueueMux);
-        mqttCommandQueueHead = 0U;
-        mqttCommandQueueTail = 0U;
-        mqttCommandQueueCount = 0U;
-        portEXIT_CRITICAL(&mqttCommandQueueMux);
+        runtime::refreshControllerConnectivity(isConnectedNow, isControllerConnected, controllerSerialLink, virtualDevice,
+                                               isAuthoritativeStateDirty, canServeCachedStateRequests, bootstrapPhase, bootstrapRequestDue,
+                                               lastBootstrapRequestMs);
     }
 
     /**
@@ -608,39 +522,7 @@ public:
      */
     void clearPendingBridgeDiagnostics()
     {
-        controllerSerialLink.clearPendingActuatorStormDiagnostic();
-
-        portENTER_CRITICAL(&mqttCommandQueueMux);
-        droppedDeviceMqttCommandCount = 0U;
-        droppedServiceMqttCommandCount = 0U;
-        portEXIT_CRITICAL(&mqttCommandQueueMux);
-    }
-
-    /**
-     * @brief Aggregate one MQTT queue overflow occurrence.
-     * @details The callback may drop many commands in quick succession. Instead
-     *          of publishing one diagnostic per drop, the bridge keeps a small
-     *          per-topic-family counter and publishes an aggregated event later
-     *          from the main loop.
-     */
-    void recordDroppedQueuedMqttCommand(MqttCommandSource source)
-    {
-        portENTER_CRITICAL(&mqttCommandQueueMux);
-        if (source == MqttCommandSource::Device)
-        {
-            if (droppedDeviceMqttCommandCount < kBridgeDiagnosticCounterMax)
-            {
-                ++droppedDeviceMqttCommandCount;
-            }
-        }
-        else
-        {
-            if (droppedServiceMqttCommandCount < kBridgeDiagnosticCounterMax)
-            {
-                ++droppedServiceMqttCommandCount;
-            }
-        }
-        portEXIT_CRITICAL(&mqttCommandQueueMux);
+        runtime::clearPendingBridgeDiagnostics(controllerSerialLink, mqttCommandQueue);
     }
 
     /**
@@ -651,61 +533,8 @@ public:
      */
     void publishPendingBridgeDiagnostics()
     {
-        if (!Homie.isConnected() || !hasBridgeTopic())
-        {
-            return;
-        }
-
-        ControllerSerialLink::ActuatorStormDiagnostic actuatorStormDiagnostic{};
-        if (controllerSerialLink.peekPendingActuatorStormDiagnostic(actuatorStormDiagnostic))
-        {
-            StaticJsonDocument<kBridgeDiagnosticDocSize> diagnosticDoc;
-            diagnosticDoc[kBridgeEventKey] = kDiagnosticEvent;
-            diagnosticDoc[kBridgeDiagnosticKindKey] = kActuatorStormDroppedDiagnostic;
-            diagnosticDoc[kPendingDurationMsKey] = actuatorStormDiagnostic.pendingDurationMs;
-            diagnosticDoc[kMutationCountKey] = actuatorStormDiagnostic.mutationCount;
-
-            if (MqttPublisher::sendJson(diagnosticDoc, MqttTopicsBuilder::mqttOutBridgeTopic.c_str(), false, 1))
-            {
-                controllerSerialLink.clearPendingActuatorStormDiagnostic();
-            }
-        }
-
-        std::uint16_t droppedDeviceCommands = 0U;
-        std::uint16_t droppedServiceCommands = 0U;
-        portENTER_CRITICAL(&mqttCommandQueueMux);
-        droppedDeviceCommands = droppedDeviceMqttCommandCount;
-        droppedServiceCommands = droppedServiceMqttCommandCount;
-        portEXIT_CRITICAL(&mqttCommandQueueMux);
-
-        if (droppedDeviceCommands == 0U && droppedServiceCommands == 0U)
-        {
-            return;
-        }
-
-        StaticJsonDocument<kBridgeDiagnosticDocSize> diagnosticDoc;
-        diagnosticDoc[kBridgeEventKey] = kDiagnosticEvent;
-        diagnosticDoc[kBridgeDiagnosticKindKey] = kMqttQueueOverflowDiagnostic;
-        if (droppedDeviceCommands > 0U)
-        {
-            diagnosticDoc[kDroppedDeviceCommandsKey] = droppedDeviceCommands;
-        }
-        if (droppedServiceCommands > 0U)
-        {
-            diagnosticDoc[kDroppedServiceCommandsKey] = droppedServiceCommands;
-        }
-
-        if (MqttPublisher::sendJson(diagnosticDoc, MqttTopicsBuilder::mqttOutBridgeTopic.c_str(), false, 1))
-        {
-            portENTER_CRITICAL(&mqttCommandQueueMux);
-            droppedDeviceMqttCommandCount = (droppedDeviceMqttCommandCount > droppedDeviceCommands)
-                                                ? static_cast<std::uint16_t>(droppedDeviceMqttCommandCount - droppedDeviceCommands)
-                                                : 0U;
-            droppedServiceMqttCommandCount = (droppedServiceMqttCommandCount > droppedServiceCommands)
-                                                 ? static_cast<std::uint16_t>(droppedServiceMqttCommandCount - droppedServiceCommands)
-                                                 : 0U;
-            portEXIT_CRITICAL(&mqttCommandQueueMux);
-        }
+        runtime::publishPendingBridgeDiagnostics(controllerSerialLink, mqttCommandQueue, Homie.isConnected(), hasBridgeTopic(),
+                                                 MqttTopicsBuilder::mqttOutBridgeTopic.c_str());
     }
 
     /**
@@ -717,17 +546,10 @@ public:
      * @param diagnosticKind short stable identifier of the lifecycle event to
      *        publish, for example `topology_changed`.
      */
-    void publishSimpleBridgeDiagnostic(const char *diagnosticKind) const
+    [[nodiscard]] auto publishSimpleBridgeDiagnostic(const char *diagnosticKind) const -> bool
     {
-        if (!Homie.isConnected() || !hasBridgeTopic())
-        {
-            return;
-        }
-
-        StaticJsonDocument<kBridgeDiagnosticDocSize> diagnosticDoc;
-        diagnosticDoc[kBridgeEventKey] = kDiagnosticEvent;
-        diagnosticDoc[kBridgeDiagnosticKindKey] = diagnosticKind;
-        (void)MqttPublisher::sendJson(diagnosticDoc, MqttTopicsBuilder::mqttOutBridgeTopic.c_str(), false, 1);
+        return runtime::publishSimpleBridgeDiagnostic(Homie.isConnected(), hasBridgeTopic(), MqttTopicsBuilder::mqttOutBridgeTopic.c_str(),
+                                                      diagnosticKind);
     }
 
     /**
@@ -737,32 +559,29 @@ public:
      *          unless both controller connectivity and runtime synchronization
      *          are currently true.
      */
-    void publishServicePingReply() const
+    [[nodiscard]] auto publishServicePingReply() const -> bool
     {
-        if (!Homie.isConnected() || !hasBridgeTopic())
-        {
-            return;
-        }
-
-        StaticJsonDocument<kBridgeDiagnosticDocSize> bridgeDoc;
-        bridgeDoc[kBridgeEventKey] = kServicePingReplyEvent;
-        bridgeDoc[kControllerConnectedKey] = controllerSerialLink.isConnected();
-        bridgeDoc[kRuntimeSynchronizedKey] = virtualDevice.isRuntimeSynchronized();
-        bridgeDoc[kBootstrapPhaseKey] = bootstrapPhaseName();
-        (void)MqttPublisher::sendJson(bridgeDoc, MqttTopicsBuilder::mqttOutBridgeTopic.c_str(), false, 1);
+        return runtime::publishServicePingReply(Homie.isConnected(), hasBridgeTopic(), MqttTopicsBuilder::mqttOutBridgeTopic.c_str(),
+                                                controllerSerialLink.isConnected(), virtualDevice.isRuntimeSynchronized(),
+                                                bootstrapPhaseName());
     }
 
     /**
      * @brief Forget transient MQTT/session state after Wi-Fi or MQTT loss.
      * @details Topology and the in-memory controller model are intentionally
      *          preserved. Only session-scoped items are dropped so a reconnect
-     *          can reuse cached topology and re-confirm runtime state.
+     *          can reuse cached topology and re-confirm runtime state. A
+     *          completed topology migration keeps its pending reboot deadline
+     *          across disconnects so the bridge cannot stay stuck forever in
+     *          `TOPOLOGY_MIGRATION_PENDING_REBOOT`.
      */
     void handleDisconnect()
     {
         mqttClient = nullptr;
+        mqttResyncPending = false;
+        lastMqttResyncAttemptMs = 0U;
         clearPendingRuntimeState();
-        clearQueuedMqttCommands();
+        mqttCommandQueue.clear();
         clearPendingBridgeDiagnostics();
     }
 
@@ -773,7 +592,8 @@ public:
      *          currently silent so the bridge can discover a freshly powered-on
      *          or freshly rebooted core without a misleading "connected" guess.
      *          The fixed cadence keeps the controller firmly in charge and keeps
-     *          bootstrap traffic predictable.
+     *          bootstrap traffic predictable. The retry timer advances only
+     *          after the UART accepted the whole outbound request.
      */
     void processBootstrapProgress()
     {
@@ -795,11 +615,17 @@ public:
 
         if (bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
         {
-            (void)controllerSerialLink.sendJson(constants::payloads::StaticType::ASK_DETAILS);
+            if (!controllerSerialLink.sendJson(constants::payloads::StaticType::ASK_DETAILS))
+            {
+                return;
+            }
         }
         else
         {
-            (void)controllerSerialLink.sendJson(constants::payloads::StaticType::ASK_STATE);
+            if (!controllerSerialLink.sendJson(constants::payloads::StaticType::ASK_STATE))
+            {
+                return;
+            }
         }
 
         lastBootstrapRequestMs = now;
@@ -813,17 +639,39 @@ public:
      *          Until persistence succeeds the bridge stays in
      *          `TOPOLOGY_MIGRATION_PENDING_REBOOT` and intentionally does not
      *          send more bootstrap requests, because the active MQTT/Homie model
-     *          is already known to be structurally stale.
+     *          is already known to be structurally stale. After the save
+     *          succeeds the bridge grants one short MQTT grace window for the
+     *          `topology_changed` diagnostic, but still reboots on a hard
+     *          deadline even if MQTT disconnects meanwhile.
      */
     void processPendingTopologyMigration()
     {
-        if (!hasPendingTopologySave || bootstrapPhase != BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
+        if (bootstrapPhase != BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
         {
             return;
         }
 
         const auto now = timeKeeper::getRealTime();
-        if (lastTopologySaveAttemptMs != 0U && (now - lastTopologySaveAttemptMs) < constants::runtime::BOOTSTRAP_REQUEST_INTERVAL_MS)
+        if (!hasPendingTopologySave)
+        {
+            if (topologyChangedDiagnosticPending && publishSimpleBridgeDiagnostic(kTopologyChangedDiagnostic))
+            {
+                topologyChangedDiagnosticPending = false;
+                topologyDiagnosticAcceptedMs = now;
+            }
+
+            const bool diagnosticGraceElapsed =
+                topologyDiagnosticAcceptedMs != 0U && (now - topologyDiagnosticAcceptedMs) >= kTopologyChangedDiagnosticGraceMs;
+            const bool hardDeadlineElapsed =
+                topologyRebootPendingSinceMs != 0U && (now - topologyRebootPendingSinceMs) >= constants::runtime::TOPOLOGY_REBOOT_GRACE_MS;
+            if (diagnosticGraceElapsed || hardDeadlineElapsed)
+            {
+                Homie.reboot();
+            }
+            return;
+        }
+
+        if (lastTopologySaveAttemptMs != 0U && (now - lastTopologySaveAttemptMs) < constants::runtime::TOPOLOGY_SAVE_RETRY_INTERVAL_MS)
         {
             return;
         }
@@ -835,8 +683,9 @@ public:
         }
 
         hasPendingTopologySave = false;
-        publishSimpleBridgeDiagnostic(kTopologyChangedDiagnostic);
-        Homie.reboot();
+        topologyChangedDiagnosticPending = true;
+        topologyRebootPendingSinceMs = now;
+        topologyDiagnosticAcceptedMs = 0U;
     }
 
     void markAuthoritativeStateDirty()
@@ -969,8 +818,9 @@ public:
             return;
         }
 
+        const bool fullStatePublishPending = virtualDevice.isFullStatePublishPending();
         bool homiePublished = false;
-        if (virtualDevice.consumeFullStatePublishPending())
+        if (fullStatePublishPending)
         {
             // Right after bootstrap or re-sync every node must publish once so Homie
             // definitely matches the fresh authoritative snapshot.
@@ -989,6 +839,10 @@ public:
             return;
         }
 
+        if (fullStatePublishPending)
+        {
+            virtualDevice.clearFullStatePublishPending();
+        }
         virtualDevice.clearDirtyActuators();
         isAuthoritativeStateDirty = false;
         canServeCachedStateRequests = true;
@@ -1101,21 +955,41 @@ public:
             handleControllerDetailsMessage();
             break;
 
-        case DeserializeExitCode::OK_NETWORK_CLICK:
+        case DeserializeExitCode::OK_NETWORK_CLICK_REQUEST:
+        {
+            if (Homie.isConnected() && MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 2))
+            {
+                break;
+            }
+
+            const auto failoverResult = controllerSerialLink.triggerFailoverFromReceivedClick();
+            if (failoverResult != DeserializeExitCode::ERR_NOT_CONNECTED_FAILOVER_SENT &&
+                failoverResult != DeserializeExitCode::ERR_NOT_CONNECTED_GENERAL_FAILOVER_SENT)
+            {
+                DPL("Dropping network click because MQTT publish failed and the "
+                    "controller failover command was not accepted by the UART.");
+            }
+            break;
+        }
+
+        case DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM:
             if (Homie.isConnected())
             {
-                (void)MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 2);
-            }
-            else
-            {
-                (void)controllerSerialLink.triggerFailoverFromReceivedClick();
+                if (!MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 2))
+                {
+                    DPL("Dropping controller NETWORK_CLICK_CONFIRM because the MQTT "
+                        "client did not accept the publish.");
+                }
             }
             break;
 
         case DeserializeExitCode::OK_OTHER_PAYLOAD:
             if (Homie.isConnected())
             {
-                (void)MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 2);
+                if (!MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 2))
+                {
+                    DPL("Dropping controller event payload because the MQTT client did not accept the publish.");
+                }
             }
             break;
 
@@ -1139,10 +1013,7 @@ public:
             break;
 
         case HomieEventType::MQTT_READY:
-            if (updateMqttClient() && subscribeMqttTopics())
-            {
-                softResyncMqttPeer();
-            }
+            scheduleMqttResyncNow();
             break;
 
         default:
@@ -1250,6 +1121,8 @@ public:
      *         any local meaning to that payload type and callers may raw-forward it.
      * @return TypedCommandResult::Invalid when the payload type is known but its
      *         concrete fields do not pass bridge-side validation.
+     * @return TypedCommandResult::DeliveryFailed when the command was valid but
+     *         the bridge could not deliver the resulting publish or serial write.
      */
     [[nodiscard]] auto forwardTypedControllerCommand(const JsonDocument &commandDocument) -> TypedCommandResult
     {
@@ -1269,7 +1142,7 @@ public:
             }
             else
             {
-                (void)publishCachedDetails();
+                return publishCachedDetails() ? TypedCommandResult::Handled : TypedCommandResult::DeliveryFailed;
             }
             return TypedCommandResult::Handled;
 
@@ -1290,8 +1163,8 @@ public:
             return TypedCommandResult::Handled;
 
         case Command::FAILOVER:
-            (void)controllerSerialLink.sendJson(constants::payloads::StaticType::GENERAL_FAILOVER);
-            return TypedCommandResult::Handled;
+            return controllerSerialLink.sendJson(constants::payloads::StaticType::GENERAL_FAILOVER) ? TypedCommandResult::Handled
+                                                                                                    : TypedCommandResult::DeliveryFailed;
 
         case Command::SET_SINGLE_ACTUATOR:
         {
@@ -1312,10 +1185,8 @@ public:
                        ? TypedCommandResult::Handled
                        : TypedCommandResult::Invalid;
 
-        case Command::NETWORK_CLICK_REQUEST:
         case Command::NETWORK_CLICK_ACK:
         case Command::FAILOVER_CLICK:
-        case Command::NETWORK_CLICK_CONFIRM:
         {
             // Click payloads are tiny and structurally simple, so the bridge rebuilds
             // a compact serial document instead of forwarding unknown fields.
@@ -1324,9 +1195,7 @@ public:
             std::uint8_t clickableId = 0U;
             std::uint8_t correlationId = 0U;
 
-            if (!utils::json::tryGetUint8Scalar(commandDocument[KEY_TYPE], clickType) ||
-                !utils::json::tryGetUint8Scalar(commandDocument[KEY_ID], clickableId) ||
-                !utils::json::tryGetUint8Scalar(commandDocument[KEY_CORRELATION_ID], correlationId))
+            if (!validateInboundNetworkClickCommand(commandDocument, clickType, clickableId, correlationId))
             {
                 return TypedCommandResult::Invalid;
             }
@@ -1337,13 +1206,18 @@ public:
             serialDoc[KEY_CORRELATION_ID] = correlationId;
             if (!controllerSerialLink.sendJson(serialDoc))
             {
-                DPL("Dropping bridge-known MQTT command because the controller TX "
-                    "path rejected the serialized payload.");
-                return TypedCommandResult::Invalid;
+                return TypedCommandResult::DeliveryFailed;
             }
 
             return TypedCommandResult::Handled;
         }
+
+        case Command::NETWORK_CLICK_REQUEST:
+        case Command::NETWORK_CLICK_CONFIRM:
+            // These payloads are controller-originated events. Forwarding them
+            // from MQTT into the controller would only create a silent no-op on
+            // the core side, so the bridge rejects them explicitly.
+            return TypedCommandResult::Invalid;
 
         default:
             return TypedCommandResult::Unsupported;
@@ -1411,7 +1285,11 @@ public:
         case Command::PING_:
             if (controllerSerialLink.isConnected() && virtualDevice.isRuntimeSynchronized())
             {
-                (void)MqttPublisher::sendJson(constants::payloads::StaticType::PING_);
+                if (!MqttPublisher::sendJson(constants::payloads::StaticType::PING_))
+                {
+                    DPL("Dropping device-topic PING reply because the MQTT client "
+                        "did not accept the publish.");
+                }
             }
             return;
 
@@ -1444,6 +1322,13 @@ public:
             return;
         }
 
+        if (typedCommandResult == TypedCommandResult::DeliveryFailed)
+        {
+            DPL("Dropping bridge-known MQTT command because the bridge could not "
+                "deliver the resulting publish or serial write.");
+            return;
+        }
+
         if (typedCommandResult == TypedCommandResult::Unsupported)
         {
             if (!forwardUnsupportedCommandToController(payload, payloadLength))
@@ -1470,7 +1355,8 @@ public:
         switch (command)
         {
         case Command::BOOT:
-            softResyncMqttPeer();
+            scheduleMqttResyncNow();
+            processPendingMqttResync();
             return;
 
         case Command::SYSTEM_RESET:
@@ -1483,7 +1369,11 @@ public:
             return;
 
         case Command::PING_:
-            publishServicePingReply();
+            if (!publishServicePingReply())
+            {
+                DPL("Dropping service ping reply because the MQTT client did not "
+                    "accept the publish.");
+            }
             return;
 
         default:
@@ -1545,19 +1435,20 @@ public:
      * @details If the UART already has pending RX traffic, the bridge still
      *          processes one queued MQTT command per loop iteration so the queue
      *          cannot starve forever under continuous controller chatter. When
-     *          the UART is idle, the bridge drains more aggressively until the
-     *          queue empties or fresh serial RX traffic appears.
+     *          the UART is idle, the bridge drains more aggressively up to the
+     *          dedicated `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP` budget, so queue
+     *          capacity and per-loop CPU monopoly stay independently tunable.
      */
     void processQueuedMqttCommands()
     {
         const bool serialHadPendingRx = serial->available();
-        const std::uint8_t maxCommandsThisLoop = serialHadPendingRx ? 1U : constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY;
+        const std::uint8_t maxCommandsThisLoop = serialHadPendingRx ? 1U : constants::runtime::MQTT_MAX_COMMANDS_PER_LOOP;
         std::uint8_t processedCommands = 0U;
 
         while (processedCommands < maxCommandsThisLoop)
         {
             QueuedMqttCommand queuedCommand{};
-            if (!dequeueMqttCommand(queuedCommand))
+            if (!mqttCommandQueue.dequeue(queuedCommand))
             {
                 return;
             }
@@ -1592,15 +1483,17 @@ public:
                            std::size_t index,
                            std::size_t total)
     {
-        // Topic hashes avoid repeated `strcmp()` calls inside the hot MQTT callback.
+        // Topic hashes keep the hot callback cheap, but a final string compare is
+        // still required so a rare hash collision cannot route a foreign topic
+        // into the bridge command handler.
         const auto topicHash = djb2_hash(topic);
         MqttCommandSource source = MqttCommandSource::Device;
 
-        if (topicHash == MqttTopicsBuilder::mqttInTopicHash)
+        if (topicHash == MqttTopicsBuilder::mqttInTopicHash && std::strcmp(topic, MqttTopicsBuilder::mqttInTopic.c_str()) == 0)
         {
             source = MqttCommandSource::Device;
         }
-        else if (topicHash == constants::mqtt::MQTT_TOPIC_SERVICE_HASH)
+        else if (topicHash == constants::mqtt::MQTT_TOPIC_SERVICE_HASH && std::strcmp(topic, constants::mqtt::MQTT_TOPIC_SERVICE) == 0)
         {
             source = MqttCommandSource::Service;
         }
@@ -1609,16 +1502,30 @@ public:
             return;
         }
 
-        if (total == 0U || len == 0U || properties.retain)
+        if (properties.retain)
         {
             // Retained commands must not be replayed automatically when the bridge
             // reconnects, otherwise stale writes could be applied long after they
             // were intended.
+            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Retained);
+            DPL("Dropping MQTT command because retained commands are never replayed "
+                "into the live bridge runtime.");
+            return;
+        }
+
+        if (total == 0U || len == 0U)
+        {
+            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Fragmented);
+            DPL("Dropping MQTT command because zero-length or incomplete MQTT "
+                "payload delivery is not accepted by the bridge.");
             return;
         }
 
         if (total > constants::controllerSerial::MQTT_COMMAND_MESSAGE_MAX_SIZE)
         {
+            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Oversize);
+            DPL("Dropping MQTT command because the payload is larger than the fixed "
+                "bridge-side inbound command buffer.");
             return;
         }
 
@@ -1626,12 +1533,15 @@ public:
         // stores them in a fixed queue and parses them later in the main loop.
         if (index != 0U || len != total)
         {
+            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Fragmented);
+            DPL("Dropping MQTT command because fragmented MQTT payload delivery is "
+                "not accepted by the fixed bridge command queue.");
             return;
         }
 
-        if (!enqueueMqttCommand(source, payload, total))
+        if (!mqttCommandQueue.enqueue(source, payload, total))
         {
-            recordDroppedQueuedMqttCommand(source);
+            mqttCommandQueue.recordDroppedCommand(source);
             DPL("Dropping MQTT command because the inbound bridge queue is full. "
                 "A producer is sending commands faster than the bridge can safely "
                 "coalesce and forward them.");
@@ -1727,12 +1637,18 @@ void LSHBridge::loop()
 
     this->implementation->processQueuedMqttCommands();
     this->implementation->refreshControllerConnectivity();
+    this->implementation->processPendingMqttResync();
     this->implementation->processBootstrapProgress();
     this->implementation->processPendingTopologyMigration();
     this->implementation->controllerSerialLink.processPendingActuatorBatch();
     this->implementation->processPendingStatePublishes();
     this->implementation->publishPendingBridgeDiagnostics();
-    (void)this->implementation->controllerSerialLink.sendJson(constants::payloads::StaticType::PING_);
+    if (!this->implementation->controllerSerialLink.sendJson(constants::payloads::StaticType::PING_))
+    {
+        // A rejected heartbeat is harmless here: either the ping interval is
+        // still closed or the UART refused the frame. In both cases the next
+        // loop iteration will retry under the same normal pacing rules.
+    }
 }
 
 /**

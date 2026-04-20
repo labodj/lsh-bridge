@@ -141,7 +141,8 @@ public:
     void begin() noexcept
     {
         this->serial->begin(constants::controllerSerial::ARDCOM_SERIAL_BAUD, SERIAL_8N1, constants::controllerSerial::ARDCOM_SERIAL_RX_PIN,
-                            constants::controllerSerial::ARDCOM_SERIAL_TX_PIN, false, 5U);
+                            constants::controllerSerial::ARDCOM_SERIAL_TX_PIN, false,
+                            constants::controllerSerial::ARDCOM_SERIAL_TIMEOUT_MS);
     }
 
     void processSerialBuffer();

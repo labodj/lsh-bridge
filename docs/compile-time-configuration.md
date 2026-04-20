@@ -23,12 +23,12 @@ These limits are not cosmetic. If the controller reports more actuators/buttons 
 | `CONFIG_ARDCOM_SERIAL_BAUD` | `250000U` | UART baud rate between ESP and controller. |
 | `CONFIG_ARDCOM_SERIAL_TIMEOUT_MS` | `5U` | Compatibility fallback used as the default value for `CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS`. |
 | `CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS` | `CONFIG_ARDCOM_SERIAL_TIMEOUT_MS` | Maximum silence while a serial MsgPack frame is still incomplete. Only used when serial uses MessagePack. |
-| `CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP` | `SERIAL_RX_BUFFER_SIZE` | Maximum raw UART bytes consumed by one `ControllerSerialLink::processSerialBuffer()` call before the bridge loop returns to other work. |
+| `CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP` | `SERIAL_RX_BUFFER_SIZE` in JSON mode, `SERIAL_RX_MAX_FRAMED_MESSAGE_SIZE` in MsgPack mode | Maximum raw UART bytes consumed by one `ControllerSerialLink::processSerialBuffer()` call before the bridge loop returns to other work. |
 
 Internally the bridge keeps two different serial-related size classes:
 
 - `SERIAL_RX_BUFFER_SIZE`: sized for one complete inbound controller payload
-- `SERIAL_MAX_RX_BYTES_PER_LOOP`: fairness budget for one bridge loop iteration
+- `SERIAL_MAX_RX_BYTES_PER_LOOP`: fairness budget for one bridge loop iteration, sized to one worst-case escaped serial frame by default in MsgPack mode
 
 These are derived automatically from the controller topology limits above and are not public `CONFIG_*` knobs.
 
@@ -70,8 +70,11 @@ identity is intentionally compile-time only in the current bridge API.
 | Macro | Default | What it affects |
 | --- | --- | --- |
 | `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS` | `500U` | Delay between repeated `REQUEST_DETAILS` / `REQUEST_STATE` requests during bootstrap and controller resync. |
+| `CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS` | `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS` | Delay between repeated NVS save attempts while a topology migration is pending. |
+| `CONFIG_TOPOLOGY_REBOOT_GRACE_MS` | `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS` | Hard grace window before rebooting after a successful topology save, even if MQTT stays degraded. |
 | `CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS` | `40U` | Quiet window before a freshly received authoritative state is mirrored back out to MQTT and Homie. |
-| `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY` | `8U` | Number of complete inbound MQTT frames the bridge may buffer while the serial side is busy. Queue RAM cost is `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY * MQTT_COMMAND_MESSAGE_MAX_SIZE`, plus small queue metadata. |
+| `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY` | `8U` | Number of complete inbound MQTT frames the bridge may buffer while the serial side is busy. Queue RAM cost is `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY * MQTT_COMMAND_MESSAGE_MAX_SIZE`, plus small queue metadata. Valid range: `1..255`. |
+| `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP` | `8U` | Maximum number of queued MQTT commands the main loop drains in one iteration while the UART is idle. This is a CPU/fairness knob, not a queue-capacity knob. Valid range: `1..255`. |
 | `CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS` | `50U` | Quiet window used to coalesce multiple actuator writes into one outbound `SET_STATE`. |
 | `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS` | `1000U` | Hard limit for how long an unstable pending actuator batch may stay open before the bridge drops it. |
 | `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT` | `32U` | Maximum number of accepted state changes merged into one pending actuator batch before the bridge treats the producer as unstable. |
@@ -157,7 +160,7 @@ above and are not exposed as public compile-time values:
 
 - bridge-local diagnostics published on the MQTT `bridge` topic
 - the exact diagnostic payload shapes
-- counter aggregation and reset policy for queue-overflow diagnostics
+- counter aggregation and reset policy for queue-overflow and command-rejection diagnostics
 - the NVS-backed `DEVICE_DETAILS` cache and its on-change write policy
 
 Those behaviors are documented in
@@ -179,7 +182,7 @@ build_flags =
     ; -D CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS=5U
     ; default: CONFIG_ARDCOM_SERIAL_TIMEOUT_MS
     ; -D CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP=32U
-    ; default: SERIAL_RX_BUFFER_SIZE
+    ; default: SERIAL_RX_BUFFER_SIZE in JSON mode, SERIAL_RX_MAX_FRAMED_MESSAGE_SIZE in MsgPack mode
     -D CONFIG_MQTT_TOPIC_BASE=\"LSH\"
     -D CONFIG_MQTT_TOPIC_INPUT=\"IN\"
     -D CONFIG_MQTT_TOPIC_STATE=\"state\"
@@ -193,6 +196,10 @@ build_flags =
     -D CONFIG_PING_INTERVAL_CONTROLLINO_MS=10000U
     -D CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS=10200U
     ; -D CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS=500U
+    ; -D CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS=500U
+    ; default: CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS
+    ; -D CONFIG_TOPOLOGY_REBOOT_GRACE_MS=500U
+    ; default: CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS
     ; -D CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS=40U
     ; -D CONFIG_MQTT_COMMAND_QUEUE_CAPACITY=8U
     ; -D CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS=50U

@@ -71,7 +71,12 @@ auto sendJson(const JsonDocument &jsonDoc, const char *const topic, bool retain,
 
     char buffer[MQTT_PUBLISH_MESSAGE_MAX_SIZE];
 #ifdef CONFIG_MSG_PACK_MQTT
+    const size_t expectedSize = measureMsgPack(jsonDoc);
     const size_t size = serializeMsgPack(jsonDoc, buffer, MQTT_PUBLISH_MESSAGE_MAX_SIZE);
+    if (size != expectedSize)
+    {
+        return false;
+    }
 #else
     const size_t expectedSize = measureJson(jsonDoc);
     const size_t size = serializeJson(jsonDoc, buffer, MQTT_PUBLISH_MESSAGE_MAX_SIZE);

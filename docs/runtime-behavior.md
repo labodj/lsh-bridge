@@ -51,7 +51,9 @@ When either limit is exceeded:
 
 The AsyncMqttClient callback does not parse and route commands immediately.
 It only validates complete frames and copies them into a small bridge-side
-queue. The main loop later drains that queue when the serial path is idle.
+queue. The main loop later drains that queue with a bounded fairness policy:
+one command per loop even while serial RX is pending, or a larger bounded batch
+when the UART is idle.
 
 Current behavior:
 
@@ -111,7 +113,7 @@ If no valid cache is present yet:
 - device-scoped LSH topics are not published yet, because the bridge refuses to
   invent a controller identity before `DEVICE_DETAILS` are known
 - service-topic commands are accepted, but the bridge cannot emit a
-  device-scoped `service_ping_reply` until the first validated topology has
+  bridge-topic `service_ping_reply` until the first validated topology has
   been cached and one controlled reboot has rebuilt the runtime around it
 
 If the controller later reports a different topology:
@@ -144,7 +146,10 @@ Device-level `PING` is answered on `events` only when both conditions are true:
 - the bridge considers the controller link connected
 - the bridge runtime cache is synchronized with the controller
 
-Service-topic `PING` is always answered on `bridge`, never on `events`.
+Service-topic `PING` is answered on `bridge`, never on `events`, whenever the
+bridge already has a valid device-scoped `bridge` topic. Before the first
+validated topology snapshot is cached, the service command is still accepted
+but there is no authoritative device identity to publish under.
 Its `controller_connected` field becomes `true` only after the bridge has
 decoded at least one valid controller frame in the current boot session and
 that frame is inside the configured liveness timeout.
@@ -173,6 +178,7 @@ Current diagnostic kinds:
 
 - `actuator_command_storm_dropped`
 - `mqtt_queue_overflow`
+- `mqtt_command_rejected`
 - `topology_changed`
 
 Logical payload shape for `actuator_command_storm_dropped`:
@@ -211,12 +217,34 @@ Meaning:
 - `dropped_service_commands`: number of service-topic commands dropped because
   the inbound queue was full
 
+Logical payload shape for `mqtt_command_rejected`:
+
+```json
+{
+  "event": "diagnostic",
+  "kind": "mqtt_command_rejected",
+  "rejected_retained_commands": 3,
+  "rejected_oversize_commands": 1,
+  "rejected_fragmented_commands": 2
+}
+```
+
+Meaning:
+
+- `rejected_retained_commands`: number of retained MQTT commands rejected by
+  policy because replaying them after reconnect would be unsafe
+- `rejected_oversize_commands`: number of MQTT commands rejected before
+  enqueue because they exceeded the fixed inbound command buffer
+- `rejected_fragmented_commands`: number of MQTT commands rejected because the
+  bridge only accepts complete non-fragmented inbound frames
+
 Notes:
 
 - if MQTT is configured for MessagePack, the wire encoding is MessagePack; the
   field names and logical structure above apply unchanged
-- queue overflow diagnostics are aggregated before publish, so the bridge does
-  not emit one MQTT diagnostic for every single dropped frame
+- queue overflow and command-rejection diagnostics are aggregated before
+  publish, so the bridge does not emit one MQTT diagnostic for every single
+  rejected or dropped frame
 - diagnostics belong to the current MQTT session only; pending bridge-local
   diagnostics are cleared when MQTT disconnects so stale warnings are not
   replayed after reconnect

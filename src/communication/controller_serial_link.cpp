@@ -57,6 +57,16 @@ struct ValidatedDetailsPayload
 };
 
 /**
+ * @brief Validated scalar view of one controller-side network click payload.
+ */
+struct ValidatedNetworkClickPayload
+{
+    std::uint8_t clickType = 0U;
+    std::uint8_t clickableId = 0U;
+    std::uint8_t correlationId = 0U;
+};
+
+/**
  * @brief Lookup table used to unpack one packed state byte into 8 boolean actuator states.
  * @details Keeping the masks in a table makes the unpacking loop easy to read and
  *          avoids repeated shift operations on smaller microcontrollers.
@@ -169,6 +179,66 @@ auto validateReceivedDetailsPayload(const JsonDocument &receivedDoc, ValidatedDe
     return DeserializeExitCode::OK_DETAILS;
 }
 
+/**
+ * @brief Validate one controller-side `NETWORK_CLICK_*` payload.
+ *
+ * @param receivedDoc decoded controller frame to validate.
+ * @param outPayload destination populated only when validation succeeds.
+ * @return DeserializeExitCode::OK_NETWORK_CLICK_REQUEST when the payload is a valid request.
+ * @return DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM when the payload is a valid confirm.
+ * @return another click-specific `DeserializeExitCode` when required fields are missing or malformed.
+ */
+auto validateReceivedNetworkClickPayload(const JsonDocument &receivedDoc, ValidatedNetworkClickPayload &outPayload) -> DeserializeExitCode
+{
+    using namespace lsh::bridge::protocol;
+
+    std::uint8_t rawCommandId = 0U;
+    if (!utils::json::tryGetUint8Scalar(receivedDoc[KEY_PAYLOAD], rawCommandId))
+    {
+        return DeserializeExitCode::ERR_UNKNOWN_PAYLOAD;
+    }
+
+    switch (static_cast<Command>(rawCommandId))
+    {
+    case Command::NETWORK_CLICK_REQUEST:
+        break;
+
+    case Command::NETWORK_CLICK_CONFIRM:
+        break;
+
+    default:
+        return DeserializeExitCode::ERR_UNKNOWN_PAYLOAD;
+    }
+
+    if (!utils::json::tryGetUint8Scalar(receivedDoc[KEY_TYPE], outPayload.clickType))
+    {
+        return DeserializeExitCode::ERR_NO_CLICK_TYPE;
+    }
+
+    switch (static_cast<ProtocolClickType>(outPayload.clickType))
+    {
+    case ProtocolClickType::LONG:
+    case ProtocolClickType::SUPER_LONG:
+        break;
+
+    default:
+        return DeserializeExitCode::ERR_UNKNOWN_CLICK_TYPE;
+    }
+
+    if (!utils::json::tryGetUint8Scalar(receivedDoc[KEY_ID], outPayload.clickableId) || outPayload.clickableId == 0U)
+    {
+        return DeserializeExitCode::ERR_LONG_CLICKED_BUTTON_IMPLAUSIBLE;
+    }
+
+    if (!utils::json::tryGetUint8Scalar(receivedDoc[KEY_CORRELATION_ID], outPayload.correlationId) || outPayload.correlationId == 0U)
+    {
+        return DeserializeExitCode::ERR_CLICK_CORRELATION_ID_IMPLAUSIBLE;
+    }
+
+    return static_cast<Command>(rawCommandId) == Command::NETWORK_CLICK_REQUEST ? DeserializeExitCode::OK_NETWORK_CLICK_REQUEST
+                                                                                : DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM;
+}
+
 }  // namespace
 
 #ifdef CONFIG_MSG_PACK_ARDUINO
@@ -262,6 +332,7 @@ auto ControllerSerialLink::sendJson(const JsonDocument &json) -> bool
     DP("↑ Json to send: ");
     DPJ(json);
 #ifdef CONFIG_MSG_PACK_ARDUINO
+    const std::size_t expectedPayloadBytes = measureMsgPack(json);
     MsgPackFrameWriter framedWriter(*this->serial);
     if (!framedWriter.beginFrame())
     {
@@ -270,7 +341,7 @@ auto ControllerSerialLink::sendJson(const JsonDocument &json) -> bool
 
     const std::size_t writtenPayloadBytes = serializeMsgPack(json, framedWriter);
     const bool frameEnded = framedWriter.endFrame();
-    if (writtenPayloadBytes == 0U || !frameEnded)
+    if (writtenPayloadBytes == 0U || writtenPayloadBytes != expectedPayloadBytes || !frameEnded)
     {
         return false;
     }
@@ -979,7 +1050,10 @@ auto ControllerSerialLink::deserialize() -> constants::DeserializeExitCode
         return DeserializeExitCode::OK_STATE;
     case Command::NETWORK_CLICK_REQUEST:
     case Command::NETWORK_CLICK_CONFIRM:
-        return DeserializeExitCode::OK_NETWORK_CLICK;
+    {
+        ValidatedNetworkClickPayload clickPayload{};
+        return validateReceivedNetworkClickPayload(this->receivedDoc, clickPayload);
+    }
     case Command::BOOT:
         return DeserializeExitCode::OK_BOOT;
     case Command::PING_:
@@ -1131,33 +1205,38 @@ void ControllerSerialLink::updateLastReceivedTime()
  * MQTT. It reuses the information (click type, button ID) from the last
  * received click message (`receivedDoc`) to construct and send a specific
  * failover command back to the Controllino.
- * @return The result code of the operation.
+ * @return DeserializeExitCode::ERR_NOT_CONNECTED_FAILOVER_SENT if the specific
+ *         click failover command has been accepted by the UART.
+ * @return DeserializeExitCode::ERR_NOT_CONNECTED_GENERAL_FAILOVER_SENT if the
+ *         bridge could not build the specific click payload but a generic
+ *         failover command has been accepted by the UART.
+ * @return DeserializeExitCode::ERR_NOT_FORWARDED_OTHER_PROBLEM if the UART did
+ *         not accept the fallback command and the click could therefore not be
+ *         forwarded nor failed over safely.
  */
 auto ControllerSerialLink::triggerFailoverFromReceivedClick() -> constants::DeserializeExitCode
 {
     DP_CONTEXT();
     using namespace lsh::bridge::protocol;
 
-    if (!this->receivedDoc.containsKey(KEY_TYPE) || !this->receivedDoc.containsKey(KEY_ID) ||
-        !this->receivedDoc.containsKey(KEY_CORRELATION_ID))
+    ValidatedNetworkClickPayload clickPayload{};
+    const auto validationResult = validateReceivedNetworkClickPayload(this->receivedDoc, clickPayload);
+    if (validationResult != DeserializeExitCode::OK_NETWORK_CLICK_REQUEST)
     {
         DPL("Cannot create specific failover, sending general failover.");
-        (void)this->sendJson(StaticType::GENERAL_FAILOVER);
-        return DeserializeExitCode::ERR_NOT_CONNECTED_GENERAL_FAILOVER_SENT;
+        return this->sendJson(StaticType::GENERAL_FAILOVER) ? DeserializeExitCode::ERR_NOT_CONNECTED_GENERAL_FAILOVER_SENT
+                                                            : DeserializeExitCode::ERR_NOT_FORWARDED_OTHER_PROBLEM;
     }
-
-    JsonVariantConst jsonClickType = this->receivedDoc[KEY_TYPE];
-    JsonVariantConst jsonButtonID = this->receivedDoc[KEY_ID];
 
     this->serializationDoc.clear();
 
     this->serializationDoc[KEY_PAYLOAD] = static_cast<uint8_t>(Command::FAILOVER_CLICK);
-    this->serializationDoc[KEY_TYPE] = jsonClickType;
-    this->serializationDoc[KEY_ID] = jsonButtonID;
-    this->serializationDoc[KEY_CORRELATION_ID] = this->receivedDoc[KEY_CORRELATION_ID];
+    this->serializationDoc[KEY_TYPE] = clickPayload.clickType;
+    this->serializationDoc[KEY_ID] = clickPayload.clickableId;
+    this->serializationDoc[KEY_CORRELATION_ID] = clickPayload.correlationId;
 
-    (void)this->sendJson(this->serializationDoc);
-    return DeserializeExitCode::ERR_NOT_CONNECTED_FAILOVER_SENT;
+    return this->sendJson(this->serializationDoc) ? DeserializeExitCode::ERR_NOT_CONNECTED_FAILOVER_SENT
+                                                  : DeserializeExitCode::ERR_NOT_FORWARDED_OTHER_PROBLEM;
 }
 
 /**

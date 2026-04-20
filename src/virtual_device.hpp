@@ -119,7 +119,9 @@ public:
 
     auto isRuntimeSynchronized() const noexcept -> bool;
 
-    auto consumeFullStatePublishPending() noexcept -> bool;
+    auto isFullStatePublishPending() const noexcept -> bool;
+
+    void clearFullStatePublishPending() noexcept;
 };
 
 #endif  // LSH_BRIDGE_VIRTUAL_DEVICE_HPP

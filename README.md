@@ -29,7 +29,7 @@ At runtime it:
 - publishes controller-backed runtime traffic on MQTT `events` and bridge-local runtime traffic on MQTT `bridge`
 - re-synchronizes the runtime model when MQTT becomes ready again
 - treats MQTT device-topic `PING` as controller-backed reachability only when the controller link is alive and synchronized
-- treats MQTT service-topic `PING` as a bridge-local probe answered on `bridge`, and MQTT service-topic `BOOT` as a bridge-local resync trigger toward the controller
+- treats MQTT service-topic `PING` as a bridge-local probe answered on `bridge` whenever a validated device identity exists, and MQTT service-topic `BOOT` as a bridge-local resync trigger toward the controller
 - persists a changed controller topology and performs one controlled reboot so MQTT topics and Homie nodes are rebuilt from a coherent snapshot
 
 ## Typical Hardware Topology
@@ -121,7 +121,8 @@ The full reference lives in
 [docs/compile-time-configuration.md](./docs/compile-time-configuration.md).
 Runtime-only behaviors such as actuator command coalescing, unstable command
 storm protection, inbound MQTT queue backpressure and bridge-local MQTT
-diagnostics are documented separately in
+diagnostics such as `mqtt_queue_overflow` and `mqtt_command_rejected` are
+documented separately in
 [docs/runtime-behavior.md](./docs/runtime-behavior.md).
 The bundled
 [example `platformio.ini`](./examples/basic-homie-bridge/platformio.ini)

@@ -39,7 +39,8 @@ enum class DeserializeExitCode
     OK_PING,                                  //!< Ping received OK
     OK_BOOT,                                  //!< Boot received OK
     OK_FORWARDED,                             //!< Json has been forwarded to MQTT broker
-    OK_NETWORK_CLICK,                         //!< Network click received and stored OK
+    OK_NETWORK_CLICK_REQUEST,                 //!< Network click request received and stored OK
+    OK_NETWORK_CLICK_CONFIRM,                 //!< Network click confirmation received and stored OK
     OK_OTHER_PAYLOAD,                         //!< Other (unknown) payload received
     ERR,                                      //!< General use ERR
     ERR_INCOMPLETE,                           //!< Incomplete payload received
@@ -55,6 +56,7 @@ enum class DeserializeExitCode
     ERR_NO_CLICK_TYPE,                        //!< No click type for long click network action
     ERR_UNKNOWN_CLICK_TYPE,                   //!< Click type is unknown
     ERR_LONG_CLICKED_BUTTON_IMPLAUSIBLE,      //!< Received long clicked button not in range (min=0, max=total buttons)
+    ERR_CLICK_CORRELATION_ID_IMPLAUSIBLE,     //!< Received network click correlation ID is missing or not a positive uint8_t
     ERR_NOT_FORWARDED_OTHER_PROBLEM,          //!< Message not forwarded due to another problem
     ERR_NOT_USEFUL_JSON,                      //!< Received Json payload is well formed but not actionable in the current bridge phase
     ERR_NO_ACTUATORS,                         //!< No actuators array received

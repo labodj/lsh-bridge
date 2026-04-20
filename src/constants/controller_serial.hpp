@@ -111,6 +111,16 @@ constexpr std::uint16_t SERIAL_RX_BUFFER_SIZE = MSGPACK_SERIAL_MESSAGE_MAX_SIZE;
 constexpr std::uint16_t SERIAL_RX_BUFFER_SIZE = JSON_SERIAL_MESSAGE_MAX_SIZE;
 #endif
 
+#ifdef CONFIG_MSG_PACK_ARDUINO
+/**
+ * @brief Worst-case raw UART bytes occupied by one complete framed MsgPack payload.
+ * @details The SLIP-like transport wraps the pure payload with an opening
+ *          delimiter, a closing delimiter, and may escape every payload byte
+ *          into a two-byte sequence.
+ */
+constexpr std::uint16_t SERIAL_RX_MAX_FRAMED_MESSAGE_SIZE = static_cast<std::uint16_t>(2U + (SERIAL_RX_BUFFER_SIZE * 2U));
+#endif
+
 /**
  * @brief Number of packed bytes in one inbound MQTT `SET_STATE` command.
  */
@@ -186,7 +196,11 @@ constexpr std::uint16_t MQTT_PUBLISH_MESSAGE_MAX_SIZE = JSON_SERIAL_MESSAGE_MAX_
 #ifdef CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP
 constexpr std::uint16_t SERIAL_MAX_RX_BYTES_PER_LOOP = CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP;
 #else
+#ifdef CONFIG_MSG_PACK_ARDUINO
+constexpr std::uint16_t SERIAL_MAX_RX_BYTES_PER_LOOP = SERIAL_RX_MAX_FRAMED_MESSAGE_SIZE;
+#else
 constexpr std::uint16_t SERIAL_MAX_RX_BYTES_PER_LOOP = SERIAL_RX_BUFFER_SIZE;
+#endif
 #endif
 static_assert(SERIAL_MAX_RX_BYTES_PER_LOOP > 0U, "SERIAL_MAX_RX_BYTES_PER_LOOP must be greater than zero.");
 

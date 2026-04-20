@@ -378,11 +378,17 @@ auto VirtualDevice::isRuntimeSynchronized() const noexcept -> bool
 }
 
 /**
- * @brief Returns and clears the one-shot flag that requests a full Homie state publish.
+ * @brief Returns whether the next successful Homie refresh must publish every node.
  */
-auto VirtualDevice::consumeFullStatePublishPending() noexcept -> bool
+auto VirtualDevice::isFullStatePublishPending() const noexcept -> bool
 {
-    const bool pending = this->fullStatePublishPending;
+    return this->fullStatePublishPending;
+}
+
+/**
+ * @brief Clears the one-shot flag that requests a full Homie state publish.
+ */
+void VirtualDevice::clearFullStatePublishPending() noexcept
+{
     this->fullStatePublishPending = false;
-    return pending;
 }
