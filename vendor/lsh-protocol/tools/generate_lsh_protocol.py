@@ -39,6 +39,11 @@ VALID_CLI_TARGETS = (
 CPP_IDENTIFIER_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 TS_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+MSGPACK_FRAME_END = 0xC0
+MSGPACK_FRAME_ESCAPE = 0xDB
+MSGPACK_FRAME_ESCAPED_END = 0xDC
+MSGPACK_FRAME_ESCAPED_ESCAPE = 0xDD
+
 
 class SpecError(ValueError):
     """Raised when the shared protocol specification is invalid."""
@@ -477,11 +482,28 @@ def char_literal(char: str) -> str:
     return f"'{char}'"
 
 
-def json_static_payload_literal(command_value: int) -> str:
-    """Render the wire JSON bytes for a static `{ "p": value }` payload."""
+def json_static_payload(command_value: int) -> str:
+    """Return the compact logical JSON string for a static `{ "p": value }` payload."""
 
-    payload = json.dumps({"p": command_value}, separators=(",", ":")) + "\n"
+    return json.dumps({"p": command_value}, separators=(",", ":"))
+
+
+def json_payload_literal(payload: str) -> str:
+    """Render one JSON byte string as safe C++ character literals."""
+
     return ", ".join(char_literal(char) for char in payload)
+
+
+def json_raw_static_payload_literal(command_value: int) -> str:
+    """Render the raw JSON transport bytes for a static `{ "p": value }` payload."""
+
+    return json_payload_literal(json_static_payload(command_value))
+
+
+def json_serial_static_payload_literal(command_value: int) -> str:
+    """Render the newline-delimited serial JSON bytes for a static payload."""
+
+    return json_payload_literal(json_static_payload(command_value) + "\n")
 
 
 def msgpack_static_payload_bytes(command_value: int) -> list[int]:
@@ -507,6 +529,40 @@ def msgpack_static_payload_size(command_value: int) -> int:
     return len(msgpack_static_payload_bytes(command_value))
 
 
+def msgpack_serial_frame_bytes(payload_bytes: Sequence[int]) -> list[int]:
+    """Wrap one raw MsgPack payload in the framed serial transport bytes.
+
+    The serial transport is `END + escaped(payload) + END`.
+    Only the transport layer sees these delimiters and escape markers; the
+    logical LSH payload itself stays unchanged.
+    """
+
+    framed_bytes = [MSGPACK_FRAME_END]
+    for byte in payload_bytes:
+        if byte == MSGPACK_FRAME_END:
+            framed_bytes.extend((MSGPACK_FRAME_ESCAPE, MSGPACK_FRAME_ESCAPED_END))
+        elif byte == MSGPACK_FRAME_ESCAPE:
+            framed_bytes.extend((MSGPACK_FRAME_ESCAPE, MSGPACK_FRAME_ESCAPED_ESCAPE))
+        else:
+            framed_bytes.append(byte)
+    framed_bytes.append(MSGPACK_FRAME_END)
+    return framed_bytes
+
+
+def msgpack_serial_static_payload_literal(command_value: int) -> str:
+    """Render the final framed serial MsgPack bytes for a static payload."""
+
+    return ", ".join(
+        f"0x{byte:02X}" for byte in msgpack_serial_frame_bytes(msgpack_static_payload_bytes(command_value))
+    )
+
+
+def msgpack_serial_static_payload_size(command_value: int) -> int:
+    """Return the final serial-framed MsgPack size for a static payload."""
+
+    return len(msgpack_serial_frame_bytes(msgpack_static_payload_bytes(command_value)))
+
+
 def msgpack_payload_literal(command_value: int) -> str:
     """Render the raw, unframed MsgPack payload bytes for documentation."""
 
@@ -517,6 +573,14 @@ def markdown_escape(value: str) -> str:
     """Escape Markdown table separators to keep generated tables valid."""
 
     return value.replace("|", r"\|")
+
+
+def markdown_code_span(value: str) -> str:
+    """Render inline code spans compatibly with older Doxygen Markdown parsers."""
+
+    if "'" in value or "`" in value:
+        return f"``{value}``"
+    return f"`{value}`"
 
 
 def lower_camel_case(identifier: str) -> str:
@@ -640,17 +704,25 @@ def render_cpp_static_payloads(
     payload_lines = []
     for payload in target_payloads:
         command_value = command_values[payload.command]
-        json_bytes = json_static_payload_literal(command_value)
-        msgpack_bytes = msgpack_static_payload_literal(command_value)
-        json_size = len(json.dumps({"p": command_value}, separators=(",", ":")) + "\n")
-        msgpack_size = msgpack_static_payload_size(command_value)
+        json_raw_bytes = json_raw_static_payload_literal(command_value)
+        json_serial_bytes = json_serial_static_payload_literal(command_value)
+        msgpack_raw_bytes = msgpack_static_payload_literal(command_value)
+        msgpack_serial_bytes = msgpack_serial_static_payload_literal(command_value)
+        json_raw_size = len(json_static_payload(command_value))
+        json_serial_size = len(json_static_payload(command_value) + "\n")
+        msgpack_raw_size = msgpack_static_payload_size(command_value)
+        msgpack_serial_size = msgpack_serial_static_payload_size(command_value)
 
         payload_lines.append(
             f"    // --- {payload.name} ---\n"
-            f"    inline constexpr {array_type}<uint8_t, {json_size}> JSON_{payload.symbol_name}_BYTES = "
-            f"{{{json_bytes}}};\n"
-            f"    inline constexpr {array_type}<uint8_t, {msgpack_size}> MSGPACK_{payload.symbol_name}_BYTES = "
-            f"{{{msgpack_bytes}}};"
+            f"    inline constexpr {array_type}<uint8_t, {json_raw_size}> JSON_RAW_{payload.symbol_name}_BYTES = "
+            f"{{{json_raw_bytes}}};\n"
+            f"    inline constexpr {array_type}<uint8_t, {json_serial_size}> JSON_SERIAL_{payload.symbol_name}_BYTES = "
+            f"{{{json_serial_bytes}}};\n"
+            f"    inline constexpr {array_type}<uint8_t, {msgpack_raw_size}> MSGPACK_RAW_{payload.symbol_name}_BYTES = "
+            f"{{{msgpack_raw_bytes}}};\n"
+            f"    inline constexpr {array_type}<uint8_t, {msgpack_serial_size}> MSGPACK_SERIAL_{payload.symbol_name}_BYTES = "
+            f"{{{msgpack_serial_bytes}}};"
         )
 
     enum_lines = "\n".join(f"        {payload.cpp_name}," for payload in target_payloads)
@@ -659,7 +731,7 @@ def render_cpp_static_payloads(
     return f"""/**
  * @file    {file_name}
  * @author  Jacopo Labardi (labodj)
- * @brief Defines target-specific pre-serialized static payload bytes.
+ * @brief Defines target-specific pre-serialized static payload bytes for raw and serial transports.
  * @note Do not edit manually. Run tools/generate_lsh_protocol.py instead.
  *
  * Copyright 2026 Jacopo Labardi
@@ -745,8 +817,8 @@ def render_protocol_markdown(spec: ProtocolSpec, golden_payloads: GoldenPayloads
         "| "
         + " | ".join(
             (
-                f"`{name}`",
-                f"`{value}`",
+                markdown_code_span(name),
+                markdown_code_span(value),
                 markdown_escape(protocol_key_description(name)),
             )
         )
@@ -757,14 +829,18 @@ def render_protocol_markdown(spec: ProtocolSpec, golden_payloads: GoldenPayloads
     command_rows: list[str] = []
     for command in spec.commands:
         example = golden_payloads.payloads.get(lower_camel_case(command.name))
-        json_example = f"`{json.dumps(example, separators=(',', ':'))}`" if example is not None else ""
+        json_example = (
+            markdown_code_span(json.dumps(example, separators=(",", ":")))
+            if example is not None
+            else ""
+        )
         command_rows.append(
             "| "
             + " | ".join(
                 (
                     str(command.value),
-                    f"`{command.cpp_name}`",
-                    f"`{command.ts_name}`",
+                    markdown_code_span(command.cpp_name),
+                    markdown_code_span(command.ts_name),
                     json_example,
                     markdown_escape(command.description),
                 )
@@ -774,7 +850,13 @@ def render_protocol_markdown(spec: ProtocolSpec, golden_payloads: GoldenPayloads
 
     click_rows = "\n".join(
         "| "
-        + " | ".join((str(click_type.value), f"`{click_type.cpp_name}`", f"`{click_type.ts_name}`"))
+        + " | ".join(
+            (
+                str(click_type.value),
+                markdown_code_span(click_type.cpp_name),
+                markdown_code_span(click_type.ts_name),
+            )
+        )
         + " |"
         for click_type in spec.click_types
     )
@@ -783,13 +865,23 @@ def render_protocol_markdown(spec: ProtocolSpec, golden_payloads: GoldenPayloads
         "| "
         + " | ".join(
             (
-                f"`{payload.name}`",
-                f"`{payload.command}`",
-                f"`{payload.cpp_name}`",
-                f"`{payload.symbol_name}`",
-                ", ".join(f"`{target}`" for target in payload.targets),
-                f"`{json_static_payload_literal(spec.command_by_name()[payload.command].value)}`",
-                f"`{msgpack_payload_literal(spec.command_by_name()[payload.command].value)}`",
+                markdown_code_span(payload.name),
+                markdown_code_span(payload.command),
+                markdown_code_span(payload.cpp_name),
+                markdown_code_span(payload.symbol_name),
+                ", ".join(markdown_code_span(target) for target in payload.targets),
+                markdown_code_span(
+                    json_raw_static_payload_literal(spec.command_by_name()[payload.command].value)
+                ),
+                markdown_code_span(
+                    json_serial_static_payload_literal(spec.command_by_name()[payload.command].value)
+                ),
+                markdown_code_span(
+                    msgpack_payload_literal(spec.command_by_name()[payload.command].value)
+                ),
+                markdown_code_span(
+                    msgpack_serial_static_payload_literal(spec.command_by_name()[payload.command].value)
+                ),
             )
         )
         + " |"
@@ -858,11 +950,12 @@ Do not edit it manually.
 ## Pre-serialized Static Payloads
 
 These payloads are generated as compile-time byte arrays for zero-allocation hot paths.
-JSON static payloads include the newline transport delimiter. MsgPack static payloads
-shown below are the exact raw bytes emitted on both serial and MQTT transports.
+Each row shows both the logical raw payload bytes and the final serial transport bytes.
+The raw forms are used by transports that carry bare payloads, while the serial forms
+are already encoded exactly as they should appear on the controller link.
 
-| Name | Command | C++ Enum | C++ Symbol | Targets | JSON Bytes | MsgPack Bytes |
-| --- | --- | --- | --- | --- | --- | --- |
+| Name | Command | C++ Enum | C++ Symbol | Targets | JSON Raw Bytes | JSON Serial Bytes | MsgPack Raw Bytes | MsgPack Serial Bytes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 {static_payload_rows}
 """
 

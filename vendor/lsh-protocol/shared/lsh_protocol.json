@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "LSH Protocol",
-    "specRevision": 2026041601,
+    "specRevision": 2026042001,
     "wireProtocolMajor": 3,
     "notes": "Code-only revision. Never transmitted on wire.",
     "documentation": {
@@ -23,7 +23,7 @@
       "transport": [
         "The logical LSH payload format is transport-agnostic.",
         "JSON over serial is newline-delimited.",
-        "MsgPack over serial uses raw MsgPack payload bytes without extra transport framing.",
+        "MsgPack over serial uses `END + escaped(payload) + END`, with `END = 0xC0`, `ESC = 0xDB`, `ESC_END = 0xDC` and `ESC_ESC = 0xDD`.",
         "MQTT carries raw JSON strings or raw MsgPack payload bytes.",
         "`PING` is hop-local by default: it probes reachability of the immediate peer on the current transport unless a higher-level profile defines a stronger meaning.",
         "`BOOT` is role-local by default: it tells the receiving peer to discard runtime assumptions and re-synchronize. Whether it is forwarded across multiple hops is profile-specific, not part of the base wire contract."

@@ -3,7 +3,7 @@
 This document is auto-generated from `shared/lsh_protocol.json` by `tools/generate_lsh_protocol.py`.
 Do not edit it manually.
 
-- Spec revision: `2026041601`
+- Spec revision: `2026042001`
 - Wire protocol major: `3`
 - Revision note: Code-only revision. Never transmitted on wire.
 - Wire goal: compact payloads with single-character keys and numeric command IDs
@@ -32,7 +32,7 @@ The protocol assumes a trusted environment and a cooperative broker. There is no
 
 - The logical LSH payload format is transport-agnostic.
 - JSON over serial is newline-delimited.
-- MsgPack over serial uses raw MsgPack payload bytes without extra transport framing.
+- MsgPack over serial uses `END + escaped(payload) + END`, with `END = 0xC0`, `ESC = 0xDB`, `ESC_END = 0xDC` and `ESC_ESC = 0xDD`.
 - MQTT carries raw JSON strings or raw MsgPack payload bytes.
 - `PING` is hop-local by default: it probes reachability of the immediate peer on the current transport unless a higher-level profile defines a stronger meaning.
 - `BOOT` is role-local by default: it tells the receiving peer to discard runtime assumptions and re-synchronize. Whether it is forwarded across multiple hops is profile-specific, not part of the base wire contract.
@@ -87,13 +87,14 @@ The protocol assumes a trusted environment and a cooperative broker. There is no
 ## Pre-serialized Static Payloads
 
 These payloads are generated as compile-time byte arrays for zero-allocation hot paths.
-JSON static payloads include the newline transport delimiter. MsgPack static payloads
-shown below are the exact raw bytes emitted on both serial and MQTT transports.
+Each row shows both the logical raw payload bytes and the final serial transport bytes.
+The raw forms are used by transports that carry bare payloads, while the serial forms
+are already encoded exactly as they should appear on the controller link.
 
-| Name | Command | C++ Enum | C++ Symbol | Targets | JSON Bytes | MsgPack Bytes |
-| --- | --- | --- | --- | --- | --- | --- |
-| `BOOT` | `BOOT` | `BOOT` | `BOOT` | `core`, `bridge` | `'{', '"', 'p', '"', ':', '4', '}', '\n'` | `0x81, 0xA1, 0x70, 0x04` |
-| `PING` | `PING` | `PING_` | `PING` | `core`, `bridge` | `'{', '"', 'p', '"', ':', '5', '}', '\n'` | `0x81, 0xA1, 0x70, 0x05` |
-| `ASK_DETAILS` | `REQUEST_DETAILS` | `ASK_DETAILS` | `ASK_DETAILS` | `bridge` | `'{', '"', 'p', '"', ':', '1', '0', '}', '\n'` | `0x81, 0xA1, 0x70, 0x0A` |
-| `ASK_STATE` | `REQUEST_STATE` | `ASK_STATE` | `ASK_STATE` | `bridge` | `'{', '"', 'p', '"', ':', '1', '1', '}', '\n'` | `0x81, 0xA1, 0x70, 0x0B` |
-| `GENERAL_FAILOVER` | `FAILOVER` | `GENERAL_FAILOVER` | `GENERAL_FAILOVER` | `bridge` | `'{', '"', 'p', '"', ':', '1', '5', '}', '\n'` | `0x81, 0xA1, 0x70, 0x0F` |
+| Name | Command | C++ Enum | C++ Symbol | Targets | JSON Raw Bytes | JSON Serial Bytes | MsgPack Raw Bytes | MsgPack Serial Bytes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `BOOT` | `BOOT` | `BOOT` | `BOOT` | `core`, `bridge` | ``'{', '"', 'p', '"', ':', '4', '}'`` | ``'{', '"', 'p', '"', ':', '4', '}', '\n'`` | `0x81, 0xA1, 0x70, 0x04` | `0xC0, 0x81, 0xA1, 0x70, 0x04, 0xC0` |
+| `PING` | `PING` | `PING_` | `PING` | `core`, `bridge` | ``'{', '"', 'p', '"', ':', '5', '}'`` | ``'{', '"', 'p', '"', ':', '5', '}', '\n'`` | `0x81, 0xA1, 0x70, 0x05` | `0xC0, 0x81, 0xA1, 0x70, 0x05, 0xC0` |
+| `ASK_DETAILS` | `REQUEST_DETAILS` | `ASK_DETAILS` | `ASK_DETAILS` | `bridge` | ``'{', '"', 'p', '"', ':', '1', '0', '}'`` | ``'{', '"', 'p', '"', ':', '1', '0', '}', '\n'`` | `0x81, 0xA1, 0x70, 0x0A` | `0xC0, 0x81, 0xA1, 0x70, 0x0A, 0xC0` |
+| `ASK_STATE` | `REQUEST_STATE` | `ASK_STATE` | `ASK_STATE` | `bridge` | ``'{', '"', 'p', '"', ':', '1', '1', '}'`` | ``'{', '"', 'p', '"', ':', '1', '1', '}', '\n'`` | `0x81, 0xA1, 0x70, 0x0B` | `0xC0, 0x81, 0xA1, 0x70, 0x0B, 0xC0` |
+| `GENERAL_FAILOVER` | `FAILOVER` | `GENERAL_FAILOVER` | `GENERAL_FAILOVER` | `bridge` | ``'{', '"', 'p', '"', ':', '1', '5', '}'`` | ``'{', '"', 'p', '"', ':', '1', '5', '}', '\n'`` | `0x81, 0xA1, 0x70, 0x0F` | `0xC0, 0x81, 0xA1, 0x70, 0x0F, 0xC0` |
