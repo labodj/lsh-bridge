@@ -121,8 +121,8 @@ The full reference lives in
 [docs/compile-time-configuration.md](./docs/compile-time-configuration.md).
 Runtime-only behaviors such as actuator command coalescing, unstable command
 storm protection, inbound MQTT queue backpressure and bridge-local MQTT
-diagnostics such as `mqtt_queue_overflow` and `mqtt_command_rejected` are
-documented separately in
+diagnostics such as `mqtt_queue_overflow` and `mqtt_command_rejected`
+(including malformed-command rejections) are documented separately in
 [docs/runtime-behavior.md](./docs/runtime-behavior.md).
 The bundled
 [example `platformio.ini`](./examples/basic-homie-bridge/platformio.ini)

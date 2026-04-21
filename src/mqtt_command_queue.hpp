@@ -46,9 +46,10 @@ enum class MqttCommandSource : std::uint8_t
  */
 enum class MqttRejectedCommandReason : std::uint8_t
 {
-    Retained,   //!< The broker replayed a retained command that the bridge must ignore.
-    Oversize,   //!< The payload exceeded the fixed inbound MQTT command buffer.
-    Fragmented  //!< AsyncMqttClient delivered the command as fragments, which the bridge rejects by design.
+    Retained,    //!< The broker replayed a retained command that the bridge must ignore.
+    Oversize,    //!< The payload exceeded the fixed inbound MQTT command buffer.
+    Fragmented,  //!< AsyncMqttClient delivered the command as fragments, which the bridge rejects by design.
+    Malformed    //!< The payload reached the main loop but was not a valid bridge command document.
 };
 
 /**
@@ -58,7 +59,6 @@ struct QueuedMqttCommand
 {
     MqttCommandSource source = MqttCommandSource::Device;  //!< Topic family that produced this command.
     std::uint16_t length = 0U;                             //!< Number of valid bytes currently stored in `payload`.
-    bool ready = false;                                    //!< True only after the producer finished copying `payload`.
     std::uint8_t payload[constants::controllerSerial::MQTT_COMMAND_MESSAGE_MAX_SIZE]{};  //!< Raw queued MQTT payload bytes.
 };
 
@@ -86,6 +86,7 @@ private:
     std::uint16_t rejectedRetainedCommandCount = 0U;       //!< Aggregated number of retained commands rejected before enqueue.
     std::uint16_t rejectedOversizeCommandCount = 0U;       //!< Aggregated number of oversize commands rejected before enqueue.
     std::uint16_t rejectedFragmentedCommandCount = 0U;     //!< Aggregated number of fragmented commands rejected before enqueue.
+    std::uint16_t rejectedMalformedCommandCount = 0U;      //!< Aggregated number of malformed commands rejected during main-loop parse.
 
 public:
     [[nodiscard]] auto enqueue(MqttCommandSource source, const char *payload, std::size_t payloadLength) -> bool;
@@ -98,11 +99,13 @@ public:
     void snapshotDroppedCounters(std::uint16_t &outDroppedDeviceCommands, std::uint16_t &outDroppedServiceCommands);
     void snapshotRejectedCounters(std::uint16_t &outRejectedRetainedCommands,
                                   std::uint16_t &outRejectedOversizeCommands,
-                                  std::uint16_t &outRejectedFragmentedCommands);
+                                  std::uint16_t &outRejectedFragmentedCommands,
+                                  std::uint16_t &outRejectedMalformedCommands);
     void consumeDroppedCounters(std::uint16_t droppedDeviceCommands, std::uint16_t droppedServiceCommands);
     void consumeRejectedCounters(std::uint16_t rejectedRetainedCommands,
                                  std::uint16_t rejectedOversizeCommands,
-                                 std::uint16_t rejectedFragmentedCommands);
+                                 std::uint16_t rejectedFragmentedCommands,
+                                 std::uint16_t rejectedMalformedCommands);
 };
 
 }  // namespace lsh::bridge

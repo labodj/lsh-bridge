@@ -361,42 +361,6 @@ auto ControllerSerialLink::sendJson(const JsonDocument &json) -> bool
 }
 
 /**
- * @brief Forwards a raw, null-terminated JSON string (Don't use for msgPack!).
- * @details This overload is intentionally kept even though most bridge internals
- *          prefer the raw buffer overload. External integrator code, quick
- *          diagnostics and small examples often already have a null-terminated
- *          JSON literal and should not be forced to compute `strlen()` or build
- *          a temporary JsonDocument first. In MessagePack mode this overload is
- *          intentionally rejected because a UTF-8 JSON string is not a valid
- *          raw MessagePack payload.
- * @param jsonString A constant pointer to a null-terminated C-style string.
- * @return true if the full string frame has been accepted by the UART.
- * @return false if the pointer is null, the active codec is not JSON, or the
- *         UART accepted only part of the frame.
- */
-auto ControllerSerialLink::sendJson(const char *jsonString) -> bool
-{
-    DP_CONTEXT();
-    if (!jsonString)
-        return false;
-
-#ifdef CONFIG_MSG_PACK_ARDUINO
-    DPL("sendJson(const char*) is only valid in JSON serial mode.");
-    return false;
-#else
-    const std::size_t jsonLength = std::strlen(jsonString);
-    const std::size_t writtenPayloadBytes = this->serial->print(jsonString);
-    const std::size_t writtenDelimiterBytes = this->serial->write("\n", 1);
-    if (writtenPayloadBytes != jsonLength || writtenDelimiterBytes != 1U)
-    {
-        return false;
-    }
-    this->updateLastSentTime();
-    return true;
-#endif
-}
-
-/**
  * @brief Forwards a raw buffer of a known size using the active serial codec.
  * @details This is the most efficient method for forwarding payloads (like from
  * MQTT) as it uses a single, non-iterative `write()` operation and doesn't rely
@@ -1008,16 +972,6 @@ void ControllerSerialLink::processSerialBuffer()
 }
 
 /**
- * @brief Get the last received json document.
- *
- * @return const JsonDocument& last received json document.
- */
-auto ControllerSerialLink::getReceivedDoc() const -> const JsonDocument &
-{
-    return this->receivedDoc;
-}
-
-/**
  * @brief Deserializes the last received JSON document and identifies the
  * payload type.
  * @details This method is state-agnostic. It only determines what kind of
@@ -1136,31 +1090,6 @@ auto ControllerSerialLink::parseDetailsFromReceived(DeviceDetailsSnapshot &outDe
         outDetails.buttonIds.push_back(idVariant.as<std::uint8_t>());
     }
 
-    return DeserializeExitCode::OK_DETAILS;
-}
-
-/**
- * @brief Validate and cache received details.
- * @details The bridge stores the full validated topology snapshot that it needs
- *          for future cache-based replies: device name, actuator IDs and button
- *          IDs. State validity remains independent and requires a fresh
- *          authoritative state frame.
- *
- * @return constants::DeserializeExitCode::OK_DETAILS if validation succeeds and
- *         the in-memory `VirtualDevice` cache has been updated.
- * @return any other `DeserializeExitCode` if the last received payload is not a
- *         valid `DEVICE_DETAILS` frame.
- */
-auto ControllerSerialLink::storeDetailsFromReceived() const -> constants::DeserializeExitCode
-{
-    DeviceDetailsSnapshot details{};
-    const auto result = this->parseDetailsFromReceived(details);
-    if (result != DeserializeExitCode::OK_DETAILS)
-    {
-        return result;
-    }
-
-    this->virtualDevice.setDetails(details);
     return DeserializeExitCode::OK_DETAILS;
 }
 

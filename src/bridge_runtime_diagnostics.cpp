@@ -43,7 +43,9 @@ constexpr char REJECTED_RETAINED_COMMANDS_KEY[] =
 constexpr char REJECTED_OVERSIZE_COMMANDS_KEY[] =
     "rejected_oversize_commands";  //!< JSON key that reports oversize commands rejected before enqueue.
 constexpr char REJECTED_FRAGMENTED_COMMANDS_KEY[] =
-    "rejected_fragmented_commands";                                  //!< JSON key that reports fragmented commands rejected before enqueue.
+    "rejected_fragmented_commands";  //!< JSON key that reports fragmented commands rejected before enqueue.
+constexpr char REJECTED_MALFORMED_COMMANDS_KEY[] =
+    "rejected_malformed_commands";                                   //!< JSON key that reports malformed commands rejected during parse.
 constexpr char CONTROLLER_CONNECTED_KEY[] = "controller_connected";  //!< JSON key that exposes current controller-link liveness.
 constexpr char RUNTIME_SYNCHRONIZED_KEY[] = "runtime_synchronized";  //!< JSON key that exposes bridge/runtime synchronization state.
 constexpr char BOOTSTRAP_PHASE_KEY[] = "bootstrap_phase";            //!< JSON key that names the current high-level bootstrap phase.
@@ -52,7 +54,7 @@ constexpr char ACTUATOR_STORM_DROPPED_DIAGNOSTIC[] =
 constexpr char MQTT_QUEUE_OVERFLOW_DIAGNOSTIC[] =
     "mqtt_queue_overflow";  //!< Diagnostic subtype used when the inbound MQTT queue overflowed.
 constexpr char MQTT_COMMAND_REJECTED_DIAGNOSTIC[] =
-    "mqtt_command_rejected";  //!< Diagnostic subtype used when the MQTT callback rejects malformed or unsupported delivery shapes.
+    "mqtt_command_rejected";  //!< Diagnostic subtype used when the bridge rejects MQTT commands before routing them into the live runtime.
 
 }  // namespace
 
@@ -137,9 +139,12 @@ void publishPendingBridgeDiagnostics(ControllerSerialLink &controllerSerialLink,
     std::uint16_t rejectedRetainedCommands = 0U;
     std::uint16_t rejectedOversizeCommands = 0U;
     std::uint16_t rejectedFragmentedCommands = 0U;
-    mqttCommandQueue.snapshotRejectedCounters(rejectedRetainedCommands, rejectedOversizeCommands, rejectedFragmentedCommands);
+    std::uint16_t rejectedMalformedCommands = 0U;
+    mqttCommandQueue.snapshotRejectedCounters(rejectedRetainedCommands, rejectedOversizeCommands, rejectedFragmentedCommands,
+                                              rejectedMalformedCommands);
 
-    if (rejectedRetainedCommands == 0U && rejectedOversizeCommands == 0U && rejectedFragmentedCommands == 0U)
+    if (rejectedRetainedCommands == 0U && rejectedOversizeCommands == 0U && rejectedFragmentedCommands == 0U &&
+        rejectedMalformedCommands == 0U)
     {
         return;
     }
@@ -159,10 +164,15 @@ void publishPendingBridgeDiagnostics(ControllerSerialLink &controllerSerialLink,
     {
         diagnosticDoc[REJECTED_FRAGMENTED_COMMANDS_KEY] = rejectedFragmentedCommands;
     }
+    if (rejectedMalformedCommands > 0U)
+    {
+        diagnosticDoc[REJECTED_MALFORMED_COMMANDS_KEY] = rejectedMalformedCommands;
+    }
 
     if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, 1))
     {
-        mqttCommandQueue.consumeRejectedCounters(rejectedRetainedCommands, rejectedOversizeCommands, rejectedFragmentedCommands);
+        mqttCommandQueue.consumeRejectedCounters(rejectedRetainedCommands, rejectedOversizeCommands, rejectedFragmentedCommands,
+                                                 rejectedMalformedCommands);
     }
 }
 

@@ -1411,12 +1411,18 @@ public:
 
         if (deserializationError != DeserializationError::Ok)
         {
+            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Malformed);
+            DPL("Dropping MQTT command because the payload is not valid JSON/MsgPack "
+                "for the active MQTT codec.");
             return;
         }
 
         std::uint8_t rawCommand = 0U;
         if (!utils::json::tryGetUint8Scalar(commandDocument[KEY_PAYLOAD], rawCommand))
         {
+            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Malformed);
+            DPL("Dropping MQTT command because the payload is missing a valid uint8 "
+                "command id in key 'p'.");
             return;
         }
 

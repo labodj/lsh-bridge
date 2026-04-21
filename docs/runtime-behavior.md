@@ -225,7 +225,8 @@ Logical payload shape for `mqtt_command_rejected`:
   "kind": "mqtt_command_rejected",
   "rejected_retained_commands": 3,
   "rejected_oversize_commands": 1,
-  "rejected_fragmented_commands": 2
+  "rejected_fragmented_commands": 2,
+  "rejected_malformed_commands": 4
 }
 ```
 
@@ -237,6 +238,9 @@ Meaning:
   enqueue because they exceeded the fixed inbound command buffer
 - `rejected_fragmented_commands`: number of MQTT commands rejected because the
   bridge only accepts complete non-fragmented inbound frames
+- `rejected_malformed_commands`: number of MQTT commands whose delivery shape
+  was acceptable but whose payload was not valid JSON/MsgPack for the active
+  codec or did not contain a valid `p` command id
 
 Notes:
 

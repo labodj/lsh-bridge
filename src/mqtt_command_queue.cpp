@@ -29,9 +29,9 @@ namespace lsh::bridge
  * @brief Copy one complete MQTT frame into the fixed bridge-side queue.
  * @details The MQTT callback may run concurrently with disconnect teardown.
  *          The bridge therefore keeps enqueue fully linearizable: reserve the
- *          slot, copy the payload and mark it ready while the queue lock is
- *          held. This keeps teardown safe even if MQTT disconnects while a
- *          callback is still in flight.
+ *          slot and copy the payload while the queue lock is held. This keeps
+ *          teardown safe even if MQTT disconnects while a callback is still in
+ *          flight.
  *
  * @param source Topic family that produced this command.
  * @param payload Raw MQTT payload bytes.
@@ -53,9 +53,7 @@ auto MqttCommandQueue::enqueue(MqttCommandSource source, const char *payload, st
         auto &slot = this->queue[this->tail];
         slot.source = source;
         slot.length = static_cast<std::uint16_t>(payloadLength);
-        slot.ready = false;
         std::memcpy(slot.payload, payload, payloadLength);
-        slot.ready = true;
         this->tail = static_cast<std::uint8_t>((this->tail + 1U) % constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY);
         ++this->count;
         wasQueued = true;
@@ -69,8 +67,8 @@ auto MqttCommandQueue::enqueue(MqttCommandSource source, const char *payload, st
  * @brief Pop the oldest queued MQTT frame from the fixed ring buffer.
  * @details Head, tail and count are protected by `queueMux` because the MQTT
  *          callback path and the main loop can touch the queue concurrently.
- *          The dequeue side also checks the per-slot ready flag so an
- *          in-flight producer cannot expose a partially copied payload.
+ *          Because enqueue commits the whole slot under the same lock, dequeue
+ *          never needs a per-slot readiness bit.
  *
  * @param outCommand Destination for the oldest queued frame.
  * @return true if one queued frame has been copied into `outCommand`.
@@ -80,10 +78,9 @@ auto MqttCommandQueue::dequeue(QueuedMqttCommand &outCommand) -> bool
 {
     bool wasDequeued = false;
     portENTER_CRITICAL(&this->queueMux);
-    if (this->count > 0U && this->queue[this->head].ready)
+    if (this->count > 0U)
     {
         outCommand = this->queue[this->head];
-        this->queue[this->head].ready = false;
         this->head = static_cast<std::uint8_t>((this->head + 1U) % constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY);
         --this->count;
         wasDequeued = true;
@@ -104,10 +101,6 @@ void MqttCommandQueue::clear()
     this->head = 0U;
     this->tail = 0U;
     this->count = 0U;
-    for (auto &slot : this->queue)
-    {
-        slot.ready = false;
-    }
     portEXIT_CRITICAL(&this->queueMux);
 }
 
@@ -141,7 +134,7 @@ void MqttCommandQueue::recordDroppedCommand(MqttCommandSource source)
 }
 
 /**
- * @brief Aggregate one MQTT command rejection that happened before enqueue.
+ * @brief Aggregate one MQTT command rejection observed either in the callback or during main-loop parse.
  *
  * @param reason stable reason why the MQTT callback rejected the command.
  */
@@ -170,6 +163,13 @@ void MqttCommandQueue::recordRejectedCommand(MqttRejectedCommandReason reason)
             ++this->rejectedFragmentedCommandCount;
         }
         break;
+
+    case MqttRejectedCommandReason::Malformed:
+        if (this->rejectedMalformedCommandCount < DIAGNOSTIC_COUNTER_MAX)
+        {
+            ++this->rejectedMalformedCommandCount;
+        }
+        break;
     }
     portEXIT_CRITICAL(&this->queueMux);
 }
@@ -186,7 +186,7 @@ void MqttCommandQueue::clearDroppedCounters()
 }
 
 /**
- * @brief Forget every pre-enqueue rejection counter.
+ * @brief Forget every rejected-command counter.
  */
 void MqttCommandQueue::clearRejectedCounters()
 {
@@ -194,6 +194,7 @@ void MqttCommandQueue::clearRejectedCounters()
     this->rejectedRetainedCommandCount = 0U;
     this->rejectedOversizeCommandCount = 0U;
     this->rejectedFragmentedCommandCount = 0U;
+    this->rejectedMalformedCommandCount = 0U;
     portEXIT_CRITICAL(&this->queueMux);
 }
 
@@ -212,20 +213,23 @@ void MqttCommandQueue::snapshotDroppedCounters(std::uint16_t &outDroppedDeviceCo
 }
 
 /**
- * @brief Snapshot the current pre-enqueue rejection counters without mutating them.
+ * @brief Snapshot the current rejected-command counters without mutating them.
  *
  * @param outRejectedRetainedCommands Receives the number of retained commands rejected by policy.
  * @param outRejectedOversizeCommands Receives the number of oversize commands rejected before enqueue.
  * @param outRejectedFragmentedCommands Receives the number of fragmented commands rejected before enqueue.
+ * @param outRejectedMalformedCommands Receives the number of malformed commands rejected during main-loop parse.
  */
 void MqttCommandQueue::snapshotRejectedCounters(std::uint16_t &outRejectedRetainedCommands,
                                                 std::uint16_t &outRejectedOversizeCommands,
-                                                std::uint16_t &outRejectedFragmentedCommands)
+                                                std::uint16_t &outRejectedFragmentedCommands,
+                                                std::uint16_t &outRejectedMalformedCommands)
 {
     portENTER_CRITICAL(&this->queueMux);
     outRejectedRetainedCommands = this->rejectedRetainedCommandCount;
     outRejectedOversizeCommands = this->rejectedOversizeCommandCount;
     outRejectedFragmentedCommands = this->rejectedFragmentedCommandCount;
+    outRejectedMalformedCommands = this->rejectedMalformedCommandCount;
     portEXIT_CRITICAL(&this->queueMux);
 }
 
@@ -251,15 +255,17 @@ void MqttCommandQueue::consumeDroppedCounters(std::uint16_t droppedDeviceCommand
 }
 
 /**
- * @brief Consume already-published pre-enqueue rejection counters.
+ * @brief Consume already-published rejected-command counters.
  *
  * @param rejectedRetainedCommands Number of published retained-command rejections to subtract.
  * @param rejectedOversizeCommands Number of published oversize-command rejections to subtract.
  * @param rejectedFragmentedCommands Number of published fragmented-command rejections to subtract.
+ * @param rejectedMalformedCommands Number of published malformed-command rejections to subtract.
  */
 void MqttCommandQueue::consumeRejectedCounters(std::uint16_t rejectedRetainedCommands,
                                                std::uint16_t rejectedOversizeCommands,
-                                               std::uint16_t rejectedFragmentedCommands)
+                                               std::uint16_t rejectedFragmentedCommands,
+                                               std::uint16_t rejectedMalformedCommands)
 {
     portENTER_CRITICAL(&this->queueMux);
     this->rejectedRetainedCommandCount = (this->rejectedRetainedCommandCount > rejectedRetainedCommands)
@@ -272,6 +278,9 @@ void MqttCommandQueue::consumeRejectedCounters(std::uint16_t rejectedRetainedCom
         (this->rejectedFragmentedCommandCount > rejectedFragmentedCommands)
             ? static_cast<std::uint16_t>(this->rejectedFragmentedCommandCount - rejectedFragmentedCommands)
             : 0U;
+    this->rejectedMalformedCommandCount = (this->rejectedMalformedCommandCount > rejectedMalformedCommands)
+                                              ? static_cast<std::uint16_t>(this->rejectedMalformedCommandCount - rejectedMalformedCommands)
+                                              : 0U;
     portEXIT_CRITICAL(&this->queueMux);
 }
 

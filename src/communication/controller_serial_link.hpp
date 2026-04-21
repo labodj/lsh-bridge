@@ -151,15 +151,11 @@ public:
 
     [[nodiscard]] auto parseDetailsFromReceived(DeviceDetailsSnapshot &outDetails) const -> constants::DeserializeExitCode;
 
-    [[nodiscard]] auto storeDetailsFromReceived() const -> constants::DeserializeExitCode;
-
     [[nodiscard]] auto storeStateFromReceived() const -> constants::DeserializeExitCode;
 
     [[nodiscard]] auto sendJson(constants::payloads::StaticType payloadType) -> bool;
 
     [[nodiscard]] auto sendJson(const JsonDocument &json) -> bool;
-
-    [[nodiscard]] auto sendJson(const char *jsonString) -> bool;
 
     [[nodiscard]] auto sendJson(const char *buffer, std::size_t length) -> bool;
 
@@ -178,8 +174,6 @@ public:
     void clearPendingActuatorStormDiagnostic();
 
     [[nodiscard]] auto triggerFailoverFromReceivedClick() -> constants::DeserializeExitCode;
-
-    [[nodiscard]] auto getReceivedDoc() const -> const JsonDocument &;
 
     [[nodiscard]] auto isConnected() const -> bool;
 };
