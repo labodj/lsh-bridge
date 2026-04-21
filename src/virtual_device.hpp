@@ -49,6 +49,14 @@ struct DeviceDetailsSnapshot
 };
 
 /**
+ * @brief Validated authoritative actuator-state snapshot materialized as bits.
+ * @details The parser owns the responsibility of decoding and validating the
+ *          inbound packed bytes. The runtime model only receives this canonical
+ *          bitset form and applies it.
+ */
+using ActuatorStateBitset = etl::bitset<constants::virtualDevice::MAX_ACTUATORS>;
+
+/**
  * @brief Holds the cached bridge-side model of the attached physical device.
  */
 class VirtualDevice
@@ -67,11 +75,10 @@ private:
     etl::vector<std::uint8_t, constants::virtualDevice::MAX_BUTTONS>
         buttonIds{};  //!< Stores original button IDs for cache-backed `DEVICE_DETAILS` replies.
 
-    etl::bitset<constants::virtualDevice::MAX_ACTUATORS> actuatorsState{};  //!< Real-time state of all actuators.
-    etl::bitset<constants::virtualDevice::MAX_ACTUATORS>
-        dirtyActuators{};                 //!< Union of actuator changes not yet mirrored to Homie since the last publish window.
-    bool runtimeSynchronized = false;     //!< False until a fresh authoritative state arrives from the controller.
-    bool fullStatePublishPending = true;  //!< Forces a full Homie snapshot after the next authoritative state sync.
+    ActuatorStateBitset actuatorsState{};  //!< Real-time state of all actuators.
+    ActuatorStateBitset dirtyActuators{};  //!< Union of actuator changes not yet mirrored to Homie since the last publish window.
+    bool runtimeSynchronized = false;      //!< False until a fresh authoritative state arrives from the controller.
+    bool fullStatePublishPending = true;   //!< Forces a full Homie snapshot after the next authoritative state sync.
 
 public:
     VirtualDevice() noexcept {};
@@ -87,9 +94,7 @@ public:
 
     void setDetails(const DeviceDetailsSnapshot &details);
 
-    void setDetails(const char *deviceName, const JsonArrayConst &actuatorIds, const JsonArrayConst &buttonIds);
-
-    void setStateFromPackedBytes(const JsonArrayConst &packedBytes);
+    void applyAuthoritativeState(const ActuatorStateBitset &newState) noexcept;
 
     void invalidateRuntimeModel() noexcept;
 

@@ -27,22 +27,6 @@
 namespace
 {
 /**
- * @brief Copy validated JSON IDs into one ETL vector owned by the runtime model.
- *
- * @tparam Capacity ETL vector capacity.
- * @param source validated JSON array of IDs.
- * @param target ETL vector that receives the copied IDs.
- */
-template <std::size_t Capacity> void copyValidatedIds(const JsonArrayConst &source, etl::vector<std::uint8_t, Capacity> &target)
-{
-    target.clear();
-    for (const JsonVariantConst idVariant : source)
-    {
-        target.push_back(idVariant.as<std::uint8_t>());
-    }
-}
-
-/**
  * @brief Copy one stored ETL ID vector into another ETL vector of the same capacity.
  *
  * @tparam Capacity ETL vector capacity.
@@ -58,14 +42,6 @@ void copyStoredIds(const etl::vector<std::uint8_t, Capacity> &source, etl::vecto
         target.push_back(id);
     }
 }
-
-/**
- * @brief Lookup table for bit masks (8-bit).
- * @details - On AVR: Essential, avoids expensive O(i) shift operations (no barrel shifter)
- *          - On Xtensa/RISC-V (ESP32): Optional, but kept for code consistency
- *            ESP32 has barrel shifter so `1 << i` is also O(1)
- */
-constexpr std::uint8_t BIT_MASK_8[8] = {0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U};
 }  // namespace
 
 /**
@@ -95,63 +71,23 @@ void VirtualDevice::setDetails(const DeviceDetailsSnapshot &details)
 }
 
 /**
- * @brief Caches the validated bootstrap topology snapshot.
- * @details This overload accepts validated JSON views directly. It materializes
- *          a plain `DeviceDetailsSnapshot` and forwards the actual mutation to
- *          the struct-based overload so the cache logic remains single-sourced.
- *
- * @param deviceName validated device name extracted from `DEVICE_DETAILS`.
- * @param actuatorIds validated JSON array of logical actuator IDs.
- * @param buttonIds validated JSON array of logical button IDs.
- */
-void VirtualDevice::setDetails(const char *const deviceName, const JsonArrayConst &actuatorIds, const JsonArrayConst &buttonIds)
-{
-    DeviceDetailsSnapshot details{};
-    details.name.assign(deviceName);
-    copyValidatedIds(actuatorIds, details.actuatorIds);
-    copyValidatedIds(buttonIds, details.buttonIds);
-    this->setDetails(details);
-}
-
-/**
- * @brief Updates the state of all actuators from a bitpacked byte array.
+ * @brief Applies one already-decoded authoritative actuator-state snapshot.
  * @details The bridge keeps a compact authoritative bitset plus a cumulative
  *          dirty bitset. When multiple controller state frames arrive inside the
  *          same publish window, the dirty bitset keeps the union of changes so
  *          Homie refreshes every actuator whose published state became stale.
  *
- * @param packedBytes A JsonArrayConst containing the packed bytes [byte0, byte1, ...].
+ * @param newState validated authoritative actuator-state bitset.
  */
-void VirtualDevice::setStateFromPackedBytes(const JsonArrayConst &packedBytes)
+void VirtualDevice::applyAuthoritativeState(const ActuatorStateBitset &newState) noexcept
 {
     DP_CONTEXT();
-    // Build new state from packed bytes using optimized loop
-    etl::bitset<constants::virtualDevice::MAX_ACTUATORS> newState;
-
-    const std::uint8_t numBytes = static_cast<std::uint8_t>(packedBytes.size());
-    std::uint8_t actuatorIndex = 0U;
-
-    // Outer loop: iterate per byte (fewer iterations than per-actuator)
-    for (std::uint8_t byteIndex = 0U; byteIndex < numBytes && actuatorIndex < this->totalActuators; ++byteIndex)
-    {
-        const std::uint8_t packedByte = packedBytes[byteIndex].as<std::uint8_t>();
-
-        // Inner loop: unpack 8 bits from this byte
-        // Using bit operations: i & 7 is equivalent to i % 8 but MUCH faster on AVR/ESP
-        for (std::uint8_t bitIndex = 0U; bitIndex < 8U && actuatorIndex < this->totalActuators; ++bitIndex)
-        {
-            // LUT lookup: O(1), no shift needed
-            newState[actuatorIndex] = (packedByte & BIT_MASK_8[bitIndex]) != 0U;
-            ++actuatorIndex;
-        }
-    }
-
-    const etl::bitset<constants::virtualDevice::MAX_ACTUATORS> changedBits = this->actuatorsState ^ newState;
+    const ActuatorStateBitset changedBits = this->actuatorsState ^ newState;
     this->actuatorsState = newState;
     this->dirtyActuators |= changedBits;
 
     this->runtimeSynchronized = true;
-    DPL(changedBits.count(), " actuators changed (from packed bytes)");
+    DPL(changedBits.count(), " actuators changed (from decoded authoritative state)");
 }
 
 /**

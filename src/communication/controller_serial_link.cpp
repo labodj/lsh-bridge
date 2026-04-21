@@ -47,16 +47,6 @@ using lsh::bridge::transport::MsgPackFrameWriter;
 namespace
 {
 /**
- * @brief Validated view of the fields that make up one `DEVICE_DETAILS` payload.
- */
-struct ValidatedDetailsPayload
-{
-    const char *deviceName = nullptr;
-    JsonArrayConst actuatorIds;
-    JsonArrayConst buttonIds;
-};
-
-/**
  * @brief Validated scalar view of one controller-side network click payload.
  */
 struct ValidatedNetworkClickPayload
@@ -74,20 +64,23 @@ struct ValidatedNetworkClickPayload
 constexpr std::uint8_t kPackedBitMask[8] = {0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U};
 
 /**
- * @brief Validate that one JSON ID array contains only unique positive IDs.
+ * @brief Copy one JSON ID array into an ETL vector while validating every element.
  *
- * @param idList JSON array to validate.
- * @param maxAllowedIds maximum number of elements accepted by the current build.
+ * @tparam Capacity ETL vector capacity.
+ * @param idList JSON array to decode.
+ * @param target ETL vector that receives the validated IDs.
  * @return true if `idList` contains only unique IDs in the range `[1, 255]`.
  * @return false if the array is too large or contains invalid/duplicate IDs.
  */
-auto validatePositiveUniqueIds(const JsonArrayConst &idList, std::size_t maxAllowedIds) -> bool
+template <std::size_t Capacity>
+auto copyValidatedPositiveUniqueIds(const JsonArrayConst &idList, etl::vector<std::uint8_t, Capacity> &target) -> bool
 {
-    if (idList.size() > maxAllowedIds)
+    if (idList.size() > Capacity)
     {
         return false;
     }
 
+    target.clear();
     etl::bitset<256U> seenIds;
     for (const JsonVariantConst idVariant : idList)
     {
@@ -101,22 +94,25 @@ auto validatePositiveUniqueIds(const JsonArrayConst &idList, std::size_t maxAllo
             return false;
         }
         seenIds.set(validatedId);
+        target.push_back(validatedId);
     }
 
     return true;
 }
 
 /**
- * @brief Validate the last received `DEVICE_DETAILS` payload without mutating the runtime model.
+ * @brief Validate and materialize the last received `DEVICE_DETAILS` payload.
  *
  * @param receivedDoc decoded controller frame to validate.
- * @param outPayload destination view populated only on success.
+ * @param outDetails destination snapshot populated only on success.
  * @return DeserializeExitCode::OK_DETAILS if the payload is structurally valid.
  * @return any other `DeserializeExitCode` if a required field is missing or invalid.
  */
-auto validateReceivedDetailsPayload(const JsonDocument &receivedDoc, ValidatedDetailsPayload &outPayload) -> DeserializeExitCode
+auto parseReceivedDetailsSnapshot(const JsonDocument &receivedDoc, DeviceDetailsSnapshot &outDetails) -> DeserializeExitCode
 {
     using namespace lsh::bridge::protocol;
+    outDetails.clear();
+    DeviceDetailsSnapshot candidate{};
 
     const JsonVariantConst protocolMajor = receivedDoc[KEY_PROTOCOL_MAJOR];
     std::uint8_t validatedProtocolMajor = 0U;
@@ -132,13 +128,13 @@ auto validateReceivedDetailsPayload(const JsonDocument &receivedDoc, ValidatedDe
         return DeserializeExitCode::ERR_PROTOCOL_MAJOR_MISMATCH;
     }
 
-    outPayload.deviceName = receivedDoc[KEY_NAME];
-    if (outPayload.deviceName == nullptr)
+    const char *const deviceName = receivedDoc[KEY_NAME];
+    if (deviceName == nullptr)
     {
         return DeserializeExitCode::ERR_NO_NAME;
     }
 
-    const std::size_t deviceNameLength = std::strlen(outPayload.deviceName);
+    const std::size_t deviceNameLength = std::strlen(deviceName);
     if (deviceNameLength == 0U)
     {
         return DeserializeExitCode::ERR_NO_NAME;
@@ -149,34 +145,86 @@ auto validateReceivedDetailsPayload(const JsonDocument &receivedDoc, ValidatedDe
         DPL("Error: Device name is too long for this bridge build.");
         return DeserializeExitCode::ERR_NAME_TOO_LONG;
     }
+    candidate.name.assign(deviceName);
 
-    outPayload.actuatorIds = receivedDoc[KEY_ACTUATORS_ARRAY].as<JsonArrayConst>();
-    if (outPayload.actuatorIds.isNull())
+    const JsonArrayConst actuatorIds = receivedDoc[KEY_ACTUATORS_ARRAY].as<JsonArrayConst>();
+    if (actuatorIds.isNull())
     {
         DPL("Error: Missing 'a' key in device details JSON.");
         return DeserializeExitCode::ERR_MISSING_KEY_ACTUATORS_IDS;
     }
 
-    outPayload.buttonIds = receivedDoc[KEY_BUTTONS_ARRAY].as<JsonArrayConst>();
-    if (outPayload.buttonIds.isNull())
+    const JsonArrayConst buttonIds = receivedDoc[KEY_BUTTONS_ARRAY].as<JsonArrayConst>();
+    if (buttonIds.isNull())
     {
         DPL("Error: Missing 'b' key in device details JSON.");
         return DeserializeExitCode::ERR_MISSING_KEY_BUTTONS_IDS;
     }
 
-    if (!validatePositiveUniqueIds(outPayload.actuatorIds, constants::virtualDevice::MAX_ACTUATORS))
+    if (!copyValidatedPositiveUniqueIds(actuatorIds, candidate.actuatorIds))
     {
         DPL("Error: Invalid actuator IDs in device details JSON.");
         return DeserializeExitCode::ERR_ACTUATOR_ID_IMPLAUSIBLE;
     }
 
-    if (!validatePositiveUniqueIds(outPayload.buttonIds, constants::virtualDevice::MAX_BUTTONS))
+    if (!copyValidatedPositiveUniqueIds(buttonIds, candidate.buttonIds))
     {
         DPL("Error: Invalid button IDs in device details JSON.");
         return DeserializeExitCode::ERR_BUTTON_ID_IMPLAUSIBLE;
     }
 
+    outDetails = candidate;
     return DeserializeExitCode::OK_DETAILS;
+}
+
+/**
+ * @brief Validate and decode the last received packed actuator-state payload.
+ * @details This helper keeps JSON-bound validation at the transport boundary
+ *          and returns the authoritative state in the canonical bitset form
+ *          expected by the runtime model.
+ *
+ * @param receivedDoc decoded controller frame to validate.
+ * @param totalActuators number of actuators expected by the current runtime topology.
+ * @param outState destination bitset populated only on success.
+ * @return DeserializeExitCode::OK_STATE if the packed state is structurally valid.
+ * @return any other `DeserializeExitCode` if the payload shape or any packed byte is invalid.
+ */
+auto decodeReceivedPackedState(const JsonDocument &receivedDoc, std::uint8_t totalActuators, ActuatorStateBitset &outState)
+    -> DeserializeExitCode
+{
+    using namespace lsh::bridge::protocol;
+
+    const JsonArrayConst packedBytes = receivedDoc[KEY_STATE].as<JsonArrayConst>();
+    if (packedBytes.isNull())
+    {
+        return DeserializeExitCode::ERR_MISSING_KEY_STATE;
+    }
+
+    const std::size_t expectedBytes = (static_cast<std::size_t>(totalActuators) + 7U) / 8U;
+    if (packedBytes.size() != expectedBytes)
+    {
+        return DeserializeExitCode::ERR_ACTUATORS_MISMATCH;
+    }
+
+    ActuatorStateBitset decodedState{};
+    std::uint8_t actuatorIndex = 0U;
+    for (const JsonVariantConst packedByteVariant : packedBytes)
+    {
+        std::uint8_t validatedPackedByte = 0U;
+        if (!utils::json::tryGetUint8Scalar(packedByteVariant, validatedPackedByte))
+        {
+            return DeserializeExitCode::ERR_STATE_VALUE_IMPLAUSIBLE;
+        }
+
+        for (std::uint8_t bitIndex = 0U; bitIndex < 8U && actuatorIndex < totalActuators; ++bitIndex)
+        {
+            decodedState[actuatorIndex] = (validatedPackedByte & kPackedBitMask[bitIndex]) != 0U;
+            ++actuatorIndex;
+        }
+    }
+
+    outState = decodedState;
+    return DeserializeExitCode::OK_STATE;
 }
 
 /**
@@ -1027,31 +1075,14 @@ auto ControllerSerialLink::deserialize() -> constants::DeserializeExitCode
 auto ControllerSerialLink::storeStateFromReceived() const -> constants::DeserializeExitCode
 {
     DP_CONTEXT();
-    using namespace lsh::bridge::protocol;
-
-    const JsonArrayConst packedBytes = this->receivedDoc[KEY_STATE].as<JsonArrayConst>();
-    if (packedBytes.isNull())
+    ActuatorStateBitset decodedState{};
+    const auto result = decodeReceivedPackedState(this->receivedDoc, this->virtualDevice.getTotalActuators(), decodedState);
+    if (result != DeserializeExitCode::OK_STATE)
     {
-        return DeserializeExitCode::ERR_MISSING_KEY_STATE;
+        return result;
     }
 
-    const std::size_t expectedBytes = (static_cast<std::size_t>(this->virtualDevice.getTotalActuators()) + 7U) / 8U;
-    if (packedBytes.size() != expectedBytes)
-    {
-        return DeserializeExitCode::ERR_ACTUATORS_MISMATCH;
-    }
-
-    for (JsonVariantConst packedByte : packedBytes)
-    {
-        std::uint8_t validatedPackedByte = 0U;
-        if (!utils::json::tryGetUint8Scalar(packedByte, validatedPackedByte))
-        {
-            return DeserializeExitCode::ERR_STATE_VALUE_IMPLAUSIBLE;
-        }
-    }
-
-    this->virtualDevice.setStateFromPackedBytes(packedBytes);
-
+    this->virtualDevice.applyAuthoritativeState(decodedState);
     return DeserializeExitCode::OK_STATE;
 }
 
@@ -1071,26 +1102,8 @@ auto ControllerSerialLink::storeStateFromReceived() const -> constants::Deserial
 auto ControllerSerialLink::parseDetailsFromReceived(DeviceDetailsSnapshot &outDetails) const -> constants::DeserializeExitCode
 {
     DP_CONTEXT();
-    ValidatedDetailsPayload detailsPayload{};
-    const auto result = validateReceivedDetailsPayload(this->receivedDoc, detailsPayload);
-    if (result != DeserializeExitCode::OK_DETAILS)
-    {
-        return result;
-    }
-
     outDetails.clear();
-    outDetails.name.assign(detailsPayload.deviceName);
-    for (const JsonVariantConst idVariant : detailsPayload.actuatorIds)
-    {
-        outDetails.actuatorIds.push_back(idVariant.as<std::uint8_t>());
-    }
-
-    for (const JsonVariantConst idVariant : detailsPayload.buttonIds)
-    {
-        outDetails.buttonIds.push_back(idVariant.as<std::uint8_t>());
-    }
-
-    return DeserializeExitCode::OK_DETAILS;
+    return parseReceivedDetailsSnapshot(this->receivedDoc, outDetails);
 }
 
 /**
