@@ -1,9 +1,9 @@
 {
   "name": "lsh-bridge",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Reusable ESP32 bridge runtime for the LSH ecosystem, connecting serial controllers to MQTT and Homie.",
   "license": "Apache-2.0",
-  "keywords": ["lsh", "esp32", "mqtt", "homie", "bridge"],
+  "keywords": ["lsh", "esp32", "mqtt", "homie", "bridge", "serial", "msgpack"],
   "authors": [
     {
       "name": "Jacopo Labardi",
@@ -33,5 +33,16 @@
       "name": "homie-esp8266",
       "version": "https://github.com/labodj/homie-esp8266.git#v3.1.2"
     }
-  ]
+  ],
+  "export": {
+    "exclude": [
+      ".claude/*",
+      ".github/*",
+      ".gitnexus/*",
+      "docs/*",
+      "examples/*",
+      "tools/*",
+      "vendor/*"
+    ]
+  }
 }

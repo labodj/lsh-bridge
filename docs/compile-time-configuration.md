@@ -4,6 +4,30 @@
 
 The bundled example in [`examples/basic-homie-bridge/platformio.ini`](../examples/basic-homie-bridge/platformio.ini) sets all value-like macros explicitly and leaves the behavior-changing flags commented.
 
+If you are new to the public stack, read these first:
+
+- [Labo Smart Home landing page](https://github.com/labodj/labo-smart-home)
+- [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
+- [LSH getting started guide](https://github.com/labodj/labo-smart-home/blob/main/GETTING_STARTED.md)
+- [LSH troubleshooting guide](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md)
+
+Use this page when you need exact macro ownership, not the runtime story. For
+runtime behavior, diagnostics and startup semantics, read
+[runtime-behavior.md](./runtime-behavior.md).
+
+## Safe First-Lab Defaults
+
+For a first bring-up, the least painful strategy is:
+
+- start from the bundled example unchanged
+- keep the stock topic layout and service topic
+- keep the stock codec choices until the end-to-end path works once
+- make capacities large enough for the controller you actually flashed
+- match serial baud exactly with `lsh-core`
+
+Most "mysterious" first-lab problems are not mysterious at all. They come from
+changing more than one of those at the same time.
+
 ## Capacity and validation
 
 | Macro | Default | What it affects |
@@ -51,7 +75,7 @@ The bridge derives topic buffer sizes automatically from the compiled strings ab
 | Macro | Default | What it affects |
 | --- | --- | --- |
 | `CONFIG_HOMIE_FIRMWARE_NAME` | `"lsh-homie"` | Firmware name exposed through Homie. |
-| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.1.0"` | Firmware version exposed through Homie. |
+| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.2.2"` | Firmware version exposed through Homie. |
 | `CONFIG_HOMIE_BRAND` | `"LaboSmartHome"` | Homie brand string exposed by the bridge. |
 
 These macros must expand to string literals. `homie-esp8266` builds its
@@ -127,7 +151,8 @@ That default profile intentionally keeps ETL compiler/platform detection on the
 official auto-detect path and only applies the bridge's default ETL policy
 flags.
 
-If a consumer needs different ETL behavior for another target or toolchain, the
+If an embedding project needs different ETL behavior for another target or
+toolchain, the
 recommended override path is:
 
 1. Create a small project-local override header, for example `include/lsh_etl_profile_override.h`
@@ -166,6 +191,13 @@ above and are not exposed as public compile-time values:
 Those behaviors are documented in
 [`docs/runtime-behavior.md`](./runtime-behavior.md).
 
+## Read Next
+
+- For runtime policy and diagnostics: [runtime-behavior.md](./runtime-behavior.md)
+- For the bridge overview and example entry point: [../README.md](../README.md)
+- For the public stack profile: <https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md>
+- For first-lab symptom diagnosis: <https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md>
+
 ## PlatformIO example
 
 ```ini
@@ -191,7 +223,7 @@ build_flags =
     -D CONFIG_MQTT_TOPIC_BRIDGE=\"bridge\"
     -D CONFIG_MQTT_TOPIC_SERVICE=\"LSH/Node-RED/SRV\"
     -D CONFIG_HOMIE_FIRMWARE_NAME=\"lsh-homie\"
-    -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.1.0\"
+    -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.2.2\"
     -D CONFIG_HOMIE_BRAND=\"LaboSmartHome\"
     -D CONFIG_PING_INTERVAL_CONTROLLINO_MS=10000U
     -D CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS=10200U

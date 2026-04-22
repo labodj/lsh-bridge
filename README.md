@@ -1,12 +1,38 @@
+[![Build Status](https://github.com/labodj/lsh-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/labodj/lsh-bridge/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/labodj/lsh-bridge?display_name=tag&sort=semver)](https://github.com/labodj/lsh-bridge/releases/latest)
 # lsh-bridge
 
 `lsh-bridge` is the reusable library form of the LSH ESP bridge runtime.
+
+The `main` branch may move ahead between tagged releases. If you are embedding
+the library in a downstream project, prefer released tags over `main` unless
+you are intentionally coordinating unreleased work across the public LSH repos.
+
+If you are new to the public LSH stack, read the landing repository and the
+reference profile first:
+
+- [Labo Smart Home landing page](https://github.com/labodj/labo-smart-home)
+- [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
+- [LSH glossary](https://github.com/labodj/labo-smart-home/blob/main/GLOSSARY.md)
+
+## Start Here
+
+Use this README according to your goal:
+
+- If you are new to the public stack, read the landing page, reference stack and glossary first.
+- If you want the shortest answers to adoption questions, skim the landing [`FAQ.md`](https://github.com/labodj/labo-smart-home/blob/main/FAQ.md).
+- If you want the shortest end-to-end bring-up path, read the landing [`GETTING_STARTED.md`](https://github.com/labodj/labo-smart-home/blob/main/GETTING_STARTED.md) before changing bridge settings.
+- If your first lab is alive on MQTT but confusing in behavior, use the landing [`TROUBLESHOOTING.md`](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md).
+- If you want the bridge runtime model, start with [What the library does](#what-the-library-does).
+- If you want the exact runtime behaviors, read [docs/runtime-behavior.md](./docs/runtime-behavior.md).
+- If you want the compile-time tuning surface, read [docs/compile-time-configuration.md](./docs/compile-time-configuration.md).
+- If you want to embed the library quickly, jump to [Public API](#public-api) and the bundled example.
 
 The goal of this repo is narrow and pragmatic:
 
 - keep the runtime bridge logic that already works
 - expose it through a small library facade
-- leave deploy-specific PlatformIO tuning, branding and firmware wiring to the consumer project
+- leave deployment-specific PlatformIO tuning, branding and firmware wiring to the embedding project
 
 The library keeps the bridge runtime behind a small public API.
 
@@ -63,6 +89,10 @@ This repo stays focused on the reusable bridge runtime, but the hardware context
 For a system-level view of the installation pattern, see the public landing repo hardware notes:
 [Labo Smart Home hardware overview](https://github.com/labodj/labo-smart-home/blob/main/HARDWARE_OVERVIEW.md)
 
+For the cross-repo runtime story, topic model and `BOOT` / `PING` profile used
+by the public stack, see:
+[LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
+
 ## Public API
 
 The public surface is intentionally small:
@@ -84,6 +114,15 @@ void loop() {
 
 See [examples/basic-homie-bridge/src/main.cpp](./examples/basic-homie-bridge/src/main.cpp).
 
+## Bundled Example
+
+The fastest concrete starting point in this repository is:
+
+- [examples/basic-homie-bridge](./examples/basic-homie-bridge)
+
+That example already carries the public topic profile, the default service topic
+and a conservative release environment for first bring-up.
+
 ## Design notes
 
 - the library currently assumes a single active bridge instance
@@ -101,9 +140,9 @@ See [examples/basic-homie-bridge/src/main.cpp](./examples/basic-homie-bridge/src
 
 This is not yet a fully generic bridge framework. It is a clean extraction of the current working runtime into a library-shaped repo.
 
-## Consumer responsibilities
+## Integration responsibilities
 
-The consumer project should own:
+The embedding project should own:
 
 - the PlatformIO environment
 - firmware identity and release/versioning policy
@@ -177,7 +216,7 @@ python3 tools/update_lsh_protocol.py --check
 The subtree update refreshes the vendored source-of-truth copy. The local wrapper then regenerates
 the bridge-specific outputs under `src/constants/`.
 
-## Current boundaries
+## Library boundaries
 
 Inside the library:
 
@@ -213,8 +252,8 @@ board = esp32dev
 behind it can change over time, so each `lsh-bridge` release should be validated
 against the current `stable` platform release before deployment.
 
-`lsh-bridge` itself cannot pin the PlatformIO platform version for consumers.
-That choice belongs to the consumer project.
+`lsh-bridge` itself cannot pin the PlatformIO platform version for downstream
+integrations. That choice belongs to the embedding project.
 
 OTA updates only the application image (`firmware.bin`). It does not update the
 bootloader, partition table or other full-flash artifacts. If the ESP32 platform

@@ -7,6 +7,17 @@ Some of the key thresholds below are exposed as compile-time `CONFIG_*`
 macros. This page documents the behavior itself; the complete build-time knob
 reference lives in [`compile-time-configuration.md`](./compile-time-configuration.md).
 
+If you are new to the public stack, read these first:
+
+- [Labo Smart Home landing page](https://github.com/labodj/labo-smart-home)
+- [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
+- [LSH getting started guide](https://github.com/labodj/labo-smart-home/blob/main/GETTING_STARTED.md)
+- [LSH troubleshooting guide](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md)
+
+Use this page when the bridge is already in the picture and you need to
+understand why it behaves the way it does under load, reconnects, startup
+recovery or malformed input.
+
 ## Actuator command coalescing
 
 Inbound MQTT actuator commands are not forwarded immediately to the controller.
@@ -274,11 +285,19 @@ Meaning:
   `waiting_details`, `waiting_state`, `synced` and
   `topology_migration_pending_reboot`
 
-## What remains internal
+## What Is Not A Stable Runtime Contract
 
-The bridge keeps some behavior intentionally internal:
+The bridge keeps some behavior intentionally outside the stable public runtime
+contract:
 
 - the diagnostic payload field names and shapes
 - when pending diagnostics are aggregated, cleared or reset
 - low-level implementation details such as queue indexing, critical-section
   usage and document pool sizing
+
+## Read Next
+
+- For exact `CONFIG_*` ownership: [compile-time-configuration.md](./compile-time-configuration.md)
+- For the bridge overview and bundled example: [../README.md](../README.md)
+- For the public stack semantics around `BOOT`, `PING` and startup repair: <https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md>
+- For symptom-based first-lab diagnosis: <https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md>

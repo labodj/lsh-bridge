@@ -1,0 +1,84 @@
+name: CI & Release
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-generated-protocol:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: "recursive"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Validate generated protocol artifacts
+        run: python3 tools/update_lsh_protocol.py --check
+
+  build-public-example:
+    needs: validate-generated-protocol
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ["release", "release_aggressive"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: "recursive"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: python3 -m pip install --upgrade pip "platformio==6.1.19"
+
+      - name: Build public example
+        run: platformio run -d examples/basic-homie-bridge -e "${{ matrix.env }}"
+
+  release:
+    needs: [validate-generated-protocol, build-public-example]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Verify library version matches tag
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          LIBRARY_VERSION=$(python3 -c "import json; print(json.load(open('library.json', 'r', encoding='utf-8'))['version'])")
+          if [ "$LIBRARY_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: library.json version ($LIBRARY_VERSION) does not match tag version ($TAG_VERSION)"
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: lsh-bridge ${{ github.ref_name }}
+          generate_release_notes: true
