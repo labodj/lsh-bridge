@@ -125,24 +125,22 @@ constexpr std::uint16_t kTopologyChangedDiagnosticGraceMs =
  */
 [[nodiscard]] auto shouldDisableLogging(lsh::bridge::LoggingMode mode) -> bool
 {
-    switch (mode)
+    if (mode == lsh::bridge::LoggingMode::Enabled)
     {
-    case lsh::bridge::LoggingMode::Enabled:
         return false;
-
-    case lsh::bridge::LoggingMode::Disabled:
-        return true;
-
-    case lsh::bridge::LoggingMode::AutoFromBuild:
-    default:
-        // In AutoFromBuild mode the runtime mirrors the compile-time choice:
-        // debug builds keep Homie logs enabled, release builds silence them.
-#ifdef LSH_DEBUG
-        return false;
-#else
-        return true;
-#endif
     }
+    if (mode == lsh::bridge::LoggingMode::Disabled)
+    {
+        return true;
+    }
+
+    // In AutoFromBuild mode the runtime mirrors the compile-time choice:
+    // debug builds keep Homie logs enabled, release builds silence them.
+#ifdef LSH_DEBUG
+    return false;
+#else
+    return true;
+#endif
 }
 
 }  // namespace
@@ -613,19 +611,11 @@ public:
             return;
         }
 
-        if (bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
+        const auto requestType = bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS ? constants::payloads::StaticType::ASK_DETAILS
+                                                                                       : constants::payloads::StaticType::ASK_STATE;
+        if (!controllerSerialLink.sendJson(requestType))
         {
-            if (!controllerSerialLink.sendJson(constants::payloads::StaticType::ASK_DETAILS))
-            {
-                return;
-            }
-        }
-        else
-        {
-            if (!controllerSerialLink.sendJson(constants::payloads::StaticType::ASK_STATE))
-            {
-                return;
-            }
+            return;
         }
 
         lastBootstrapRequestMs = now;
@@ -973,22 +963,16 @@ public:
         }
 
         case DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM:
-            if (Homie.isConnected())
-            {
-                if (!MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 2))
-                {
-                    DPL("Dropping controller NETWORK_CLICK_CONFIRM because the MQTT "
-                        "client did not accept the publish.");
-                }
-            }
-            break;
-
         case DeserializeExitCode::OK_OTHER_PAYLOAD:
             if (Homie.isConnected())
             {
                 if (!MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 2))
                 {
-                    DPL("Dropping controller event payload because the MQTT client did not accept the publish.");
+                    const char *const dropReason =
+                        code == DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM
+                            ? "Dropping controller NETWORK_CLICK_CONFIRM because the MQTT client did not accept the publish."
+                            : "Dropping controller event payload because the MQTT client did not accept the publish.";
+                    DPL(dropReason);
                 }
             }
             break;

@@ -22,6 +22,8 @@
 #ifndef LSH_BRIDGE_CONSTANTS_DESERIALIZE_EXIT_CODES_HPP
 #define LSH_BRIDGE_CONSTANTS_DESERIALIZE_EXIT_CODES_HPP
 
+#include <cstdint>
+
 /**
  * @brief Namespace for constants.
  */
@@ -31,7 +33,7 @@ namespace constants
  * @brief Exit codes for json deserialization
  *
  */
-enum class DeserializeExitCode
+enum class DeserializeExitCode : std::uint8_t
 {
     OK,                                       //!< General use OK
     OK_DETAILS,                               //!< Details received OK

@@ -41,11 +41,11 @@ __attribute__((always_inline)) constexpr auto djb2_hash(const char *str) -> std:
     }
 
     std::uint32_t hash = 5381U;
-    int c = 0;
+    unsigned char c = 0U;
 
     while ((c = *str++))
     {
-        hash = ((hash << 5) + hash) ^ c;
+        hash = ((hash << 5) + hash) ^ static_cast<std::uint32_t>(c);
     }
 
     return hash;

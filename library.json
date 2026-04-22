@@ -1,6 +1,6 @@
 {
   "name": "lsh-bridge",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Reusable ESP32 bridge runtime for the LSH ecosystem, connecting serial controllers to MQTT and Homie.",
   "license": "Apache-2.0",
   "keywords": ["lsh", "esp32", "mqtt", "homie", "bridge", "serial", "msgpack"],

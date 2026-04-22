@@ -246,15 +246,9 @@ auto validateReceivedNetworkClickPayload(const JsonDocument &receivedDoc, Valida
         return DeserializeExitCode::ERR_UNKNOWN_PAYLOAD;
     }
 
-    switch (static_cast<Command>(rawCommandId))
+    const auto command = static_cast<Command>(rawCommandId);
+    if (command != Command::NETWORK_CLICK_REQUEST && command != Command::NETWORK_CLICK_CONFIRM)
     {
-    case Command::NETWORK_CLICK_REQUEST:
-        break;
-
-    case Command::NETWORK_CLICK_CONFIRM:
-        break;
-
-    default:
         return DeserializeExitCode::ERR_UNKNOWN_PAYLOAD;
     }
 
@@ -283,8 +277,8 @@ auto validateReceivedNetworkClickPayload(const JsonDocument &receivedDoc, Valida
         return DeserializeExitCode::ERR_CLICK_CORRELATION_ID_IMPLAUSIBLE;
     }
 
-    return static_cast<Command>(rawCommandId) == Command::NETWORK_CLICK_REQUEST ? DeserializeExitCode::OK_NETWORK_CLICK_REQUEST
-                                                                                : DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM;
+    return command == Command::NETWORK_CLICK_REQUEST ? DeserializeExitCode::OK_NETWORK_CLICK_REQUEST
+                                                     : DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM;
 }
 
 }  // namespace

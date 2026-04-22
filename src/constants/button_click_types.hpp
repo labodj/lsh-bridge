@@ -21,6 +21,8 @@
 #ifndef LSH_BRIDGE_CONSTANTS_BUTTON_CLICK_TYPES_HPP
 #define LSH_BRIDGE_CONSTANTS_BUTTON_CLICK_TYPES_HPP
 
+#include <cstdint>
+
 /**
  * @brief Namespace for constants.
  */
@@ -30,7 +32,7 @@ namespace constants
  * @brief Click types.
  *
  */
-enum class ButtonClickType
+enum class ButtonClickType : std::uint8_t
 {
     SHORT,      //!< Short click
     LONG,       //!< Long click

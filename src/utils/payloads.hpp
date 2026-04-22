@@ -21,11 +21,30 @@
 #ifndef LSH_BRIDGE_UTILS_PAYLOADS_HPP
 #define LSH_BRIDGE_UTILS_PAYLOADS_HPP
 
+#include <array>
 #include <span>
 #include "constants/payloads.hpp"
 
 namespace utils::payloads
 {
+namespace
+{
+using PayloadSpan = std::span<const std::uint8_t>;
+using PayloadTable = std::array<PayloadSpan, 5U>;
+
+[[nodiscard]] constexpr auto selectStaticPayloadSpan(constants::payloads::StaticType type, const PayloadTable &payloads)
+    -> std::span<const std::uint8_t>
+{
+    const auto index = static_cast<std::size_t>(type);
+    if (index >= payloads.size())
+    {
+        return {};
+    }
+
+    return payloads[index];
+}
+}  // namespace
+
 /**
  * @brief Gets the final serial transport bytes for one compile-time static payload.
  * @details Some bridge commands are always the same (`PING_`, `ASK_STATE`,
@@ -40,44 +59,24 @@ template <bool IsMsgPack> [[nodiscard]] constexpr auto getSerial(constants::payl
 
     if constexpr (IsMsgPack)
     {
-        switch (type)
-        {
-        case StaticType::BOOT:
-            return MSGPACK_SERIAL_BOOT_BYTES;
-        case StaticType::PING_:
-            return MSGPACK_SERIAL_PING_BYTES;
-        case StaticType::ASK_DETAILS:
-            return MSGPACK_SERIAL_ASK_DETAILS_BYTES;
-        case StaticType::ASK_STATE:
-            return MSGPACK_SERIAL_ASK_STATE_BYTES;
-        case StaticType::GENERAL_FAILOVER:
-            return MSGPACK_SERIAL_GENERAL_FAILOVER_BYTES;
-        default:
-            // Returning an empty span makes unsupported payload requests
-            // cheap to detect at the call site without allocating anything.
-            return {};
-        }
+        constexpr PayloadTable payloads = {
+            MSGPACK_SERIAL_BOOT_BYTES,
+            MSGPACK_SERIAL_PING_BYTES,
+            MSGPACK_SERIAL_ASK_DETAILS_BYTES,
+            MSGPACK_SERIAL_ASK_STATE_BYTES,
+            MSGPACK_SERIAL_GENERAL_FAILOVER_BYTES,
+        };
+        return selectStaticPayloadSpan(type, payloads);
     }
-    else  // JSON
-    {
-        switch (type)
-        {
-        case StaticType::BOOT:
-            return JSON_SERIAL_BOOT_BYTES;
-        case StaticType::PING_:
-            return JSON_SERIAL_PING_BYTES;
-        case StaticType::ASK_DETAILS:
-            return JSON_SERIAL_ASK_DETAILS_BYTES;
-        case StaticType::ASK_STATE:
-            return JSON_SERIAL_ASK_STATE_BYTES;
-        case StaticType::GENERAL_FAILOVER:
-            return JSON_SERIAL_GENERAL_FAILOVER_BYTES;
-        default:
-            // Returning an empty span makes unsupported payload requests
-            // cheap to detect at the call site without allocating anything.
-            return {};
-        }
-    }
+
+    constexpr PayloadTable payloads = {
+        JSON_SERIAL_BOOT_BYTES,
+        JSON_SERIAL_PING_BYTES,
+        JSON_SERIAL_ASK_DETAILS_BYTES,
+        JSON_SERIAL_ASK_STATE_BYTES,
+        JSON_SERIAL_GENERAL_FAILOVER_BYTES,
+    };
+    return selectStaticPayloadSpan(type, payloads);
 }
 
 /**
@@ -92,40 +91,20 @@ template <bool IsMsgPack> [[nodiscard]] constexpr auto getMqtt(constants::payloa
 
     if constexpr (IsMsgPack)
     {
-        switch (type)
-        {
-        case StaticType::BOOT:
-            return MSGPACK_RAW_BOOT_BYTES;
-        case StaticType::PING_:
-            return MSGPACK_RAW_PING_BYTES;
-        case StaticType::ASK_DETAILS:
-            return MSGPACK_RAW_ASK_DETAILS_BYTES;
-        case StaticType::ASK_STATE:
-            return MSGPACK_RAW_ASK_STATE_BYTES;
-        case StaticType::GENERAL_FAILOVER:
-            return MSGPACK_RAW_GENERAL_FAILOVER_BYTES;
-        default:
-            return {};
-        }
+        constexpr PayloadTable payloads = {
+            MSGPACK_RAW_BOOT_BYTES,
+            MSGPACK_RAW_PING_BYTES,
+            MSGPACK_RAW_ASK_DETAILS_BYTES,
+            MSGPACK_RAW_ASK_STATE_BYTES,
+            MSGPACK_RAW_GENERAL_FAILOVER_BYTES,
+        };
+        return selectStaticPayloadSpan(type, payloads);
     }
-    else  // JSON
-    {
-        switch (type)
-        {
-        case StaticType::BOOT:
-            return JSON_RAW_BOOT_BYTES;
-        case StaticType::PING_:
-            return JSON_RAW_PING_BYTES;
-        case StaticType::ASK_DETAILS:
-            return JSON_RAW_ASK_DETAILS_BYTES;
-        case StaticType::ASK_STATE:
-            return JSON_RAW_ASK_STATE_BYTES;
-        case StaticType::GENERAL_FAILOVER:
-            return JSON_RAW_GENERAL_FAILOVER_BYTES;
-        default:
-            return {};
-        }
-    }
+
+    constexpr PayloadTable payloads = {
+        JSON_RAW_BOOT_BYTES, JSON_RAW_PING_BYTES, JSON_RAW_ASK_DETAILS_BYTES, JSON_RAW_ASK_STATE_BYTES, JSON_RAW_GENERAL_FAILOVER_BYTES,
+    };
+    return selectStaticPayloadSpan(type, payloads);
 }
 }  // namespace utils::payloads
 
