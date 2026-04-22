@@ -23,7 +23,6 @@
 
 #include <cstdint>
 
-#include "utils/hash.hpp"
 #include "virtual_device.hpp"
 
 /**
@@ -75,9 +74,6 @@ static constexpr const char *MQTT_TOPIC_SERVICE = "LSH/Node-RED/SRV";  //!< Defa
 #else
 static constexpr const char *MQTT_TOPIC_SERVICE = CONFIG_MQTT_TOPIC_SERVICE;  //!< Service topic
 #endif  // CONFIG_MQTT_TOPIC_SERVICE
-static constexpr const auto MQTT_TOPIC_SERVICE_HASH =
-    djb2_hash(MQTT_TOPIC_SERVICE);  //!< Precomputed hash of the service topic for fast MQTT dispatch.
-
 static constexpr const std::uint8_t MQTT_BASE_TOPIC_LENGTH = std::char_traits<char>::length(MQTT_TOPIC_BASE) + 1U +
                                                              virtualDevice::MAX_NAME_LENGTH +
                                                              3U;  //!< Maximum length of the common `LSH/deviceName/` topic prefix.

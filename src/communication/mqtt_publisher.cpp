@@ -23,6 +23,7 @@
 #include <ArduinoJson.h>
 #include <AsyncMqttClient.h>
 
+#include "communication/checked_writer.hpp"
 #include "communication/mqtt_topics_builder.hpp"
 #include "constants/controller_serial.hpp"
 #include "debug/debug.hpp"
@@ -70,29 +71,20 @@ auto sendJson(const JsonDocument &jsonDoc, const char *const topic, bool retain,
     }
 
     char buffer[MQTT_PUBLISH_MESSAGE_MAX_SIZE];
+    lsh::bridge::communication::FixedBufferWriter bufferWriter(buffer, MQTT_PUBLISH_MESSAGE_MAX_SIZE);
 #ifdef CONFIG_MSG_PACK_MQTT
-    const size_t expectedSize = measureMsgPack(jsonDoc);
-    const size_t size = serializeMsgPack(jsonDoc, buffer, MQTT_PUBLISH_MESSAGE_MAX_SIZE);
-    if (size != expectedSize)
-    {
-        return false;
-    }
+    const size_t size = serializeMsgPack(jsonDoc, bufferWriter);
 #else
-    const size_t expectedSize = measureJson(jsonDoc);
-    const size_t size = serializeJson(jsonDoc, buffer, MQTT_PUBLISH_MESSAGE_MAX_SIZE);
-    if (size != expectedSize)
-    {
-        return false;
-    }
+    const size_t size = serializeJson(jsonDoc, bufferWriter);
 #endif  // CONFIG_MSG_PACK_MQTT
-    if (size == 0U)
+    if (size == 0U || bufferWriter.overflowed())
     {
         return false;
     }
     DPL("Json size: ", size);
     // `publish()` expects a raw byte pointer plus its exact size. `buffer`
     // already contains a contiguous serialized payload in the active codec.
-    return static_cast<bool>(mqttClient->publish(topic, qos, retain, static_cast<const char *>(buffer), size));
+    return static_cast<bool>(mqttClient->publish(topic, qos, retain, bufferWriter.data(), bufferWriter.size()));
 }
 
 /**

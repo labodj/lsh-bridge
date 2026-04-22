@@ -31,17 +31,13 @@ namespace lsh::bridge::runtime
  *          request a clean authoritative refresh.
  *
  * @param controllerSerialLink controller link that owns the pending actuator batch.
- * @param isAuthoritativeStateDirty bridge flag that tracks delayed state publish work.
- * @param canServeCachedStateRequests bridge flag that allows answering `REQUEST_STATE`
- *        directly from the synchronized cache.
+ * @param runtimeState hot bridge-side runtime flags and timestamps that must be cleared.
  */
-void clearPendingRuntimeState(ControllerSerialLink &controllerSerialLink,
-                              bool &isAuthoritativeStateDirty,
-                              bool &canServeCachedStateRequests)
+void clearPendingRuntimeState(ControllerSerialLink &controllerSerialLink, RuntimeHotState &runtimeState)
 {
     controllerSerialLink.clearPendingActuatorBatch();
-    isAuthoritativeStateDirty = false;
-    canServeCachedStateRequests = false;
+    runtimeState.isAuthoritativeStateDirty = false;
+    runtimeState.canServeCachedStateRequests = false;
 }
 
 /**
@@ -50,13 +46,12 @@ void clearPendingRuntimeState(ControllerSerialLink &controllerSerialLink,
  *          `ASK_STATE`. This helper only clears the wait timer so the next loop
  *          can retry immediately.
  *
- * @param bootstrapRequestDue flag consumed by the bootstrap state machine.
- * @param lastBootstrapRequestMs timestamp of the last accepted bootstrap request.
+ * @param runtimeState hot bridge-side runtime flags and timestamps to update.
  */
-void scheduleBootstrapRequestNow(bool &bootstrapRequestDue, std::uint32_t &lastBootstrapRequestMs)
+void scheduleBootstrapRequestNow(RuntimeHotState &runtimeState)
 {
-    bootstrapRequestDue = true;
-    lastBootstrapRequestMs = 0U;
+    runtimeState.bootstrapRequestDue = true;
+    runtimeState.lastBootstrapRequestMs = 0U;
 }
 
 /**
@@ -67,24 +62,14 @@ void scheduleBootstrapRequestNow(bool &bootstrapRequestDue, std::uint32_t &lastB
  *
  * @param controllerSerialLink controller link that owns the pending actuator batch.
  * @param virtualDevice in-memory controller model that must forget its runtime state.
- * @param isAuthoritativeStateDirty bridge flag that tracks delayed state publish work.
- * @param canServeCachedStateRequests bridge flag that controls cached `REQUEST_STATE` replies.
- * @param bootstrapPhase high-level synchronization phase to update.
- * @param bootstrapRequestDue retry flag consumed by the bootstrap loop.
- * @param lastBootstrapRequestMs timestamp of the last accepted bootstrap request.
+ * @param runtimeState hot bridge-side runtime flags and timestamps to update.
  */
-void enterWaitingForDetails(ControllerSerialLink &controllerSerialLink,
-                            VirtualDevice &virtualDevice,
-                            bool &isAuthoritativeStateDirty,
-                            bool &canServeCachedStateRequests,
-                            BootstrapPhase &bootstrapPhase,
-                            bool &bootstrapRequestDue,
-                            std::uint32_t &lastBootstrapRequestMs)
+void enterWaitingForDetails(ControllerSerialLink &controllerSerialLink, VirtualDevice &virtualDevice, RuntimeHotState &runtimeState)
 {
-    clearPendingRuntimeState(controllerSerialLink, isAuthoritativeStateDirty, canServeCachedStateRequests);
+    clearPendingRuntimeState(controllerSerialLink, runtimeState);
     virtualDevice.invalidateRuntimeModel();
-    bootstrapPhase = BootstrapPhase::WAITING_FOR_DETAILS;
-    scheduleBootstrapRequestNow(bootstrapRequestDue, lastBootstrapRequestMs);
+    runtimeState.bootstrapPhase = BootstrapPhase::WAITING_FOR_DETAILS;
+    scheduleBootstrapRequestNow(runtimeState);
 }
 
 /**
@@ -95,24 +80,14 @@ void enterWaitingForDetails(ControllerSerialLink &controllerSerialLink,
  *
  * @param controllerSerialLink controller link that owns the pending actuator batch.
  * @param virtualDevice in-memory controller model that must forget its runtime state.
- * @param isAuthoritativeStateDirty bridge flag that tracks delayed state publish work.
- * @param canServeCachedStateRequests bridge flag that controls cached `REQUEST_STATE` replies.
- * @param bootstrapPhase high-level synchronization phase to update.
- * @param bootstrapRequestDue retry flag consumed by the bootstrap loop.
- * @param lastBootstrapRequestMs timestamp of the last accepted bootstrap request.
+ * @param runtimeState hot bridge-side runtime flags and timestamps to update.
  */
-void enterWaitingForState(ControllerSerialLink &controllerSerialLink,
-                          VirtualDevice &virtualDevice,
-                          bool &isAuthoritativeStateDirty,
-                          bool &canServeCachedStateRequests,
-                          BootstrapPhase &bootstrapPhase,
-                          bool &bootstrapRequestDue,
-                          std::uint32_t &lastBootstrapRequestMs)
+void enterWaitingForState(ControllerSerialLink &controllerSerialLink, VirtualDevice &virtualDevice, RuntimeHotState &runtimeState)
 {
-    clearPendingRuntimeState(controllerSerialLink, isAuthoritativeStateDirty, canServeCachedStateRequests);
+    clearPendingRuntimeState(controllerSerialLink, runtimeState);
     virtualDevice.invalidateRuntimeModel();
-    bootstrapPhase = BootstrapPhase::WAITING_FOR_STATE;
-    scheduleBootstrapRequestNow(bootstrapRequestDue, lastBootstrapRequestMs);
+    runtimeState.bootstrapPhase = BootstrapPhase::WAITING_FOR_STATE;
+    scheduleBootstrapRequestNow(runtimeState);
 }
 
 /**
@@ -124,29 +99,21 @@ void enterWaitingForState(ControllerSerialLink &controllerSerialLink,
  * @param controllerSerialLink controller link that owns the pending actuator batch.
  * @param virtualDevice in-memory controller model that must forget its runtime state.
  * @param pendingTopologyDetails storage for the validated topology waiting to be saved.
- * @param hasPendingTopologySave flag that tells the main loop to attempt the deferred save.
- * @param isAuthoritativeStateDirty bridge flag that tracks delayed state publish work.
- * @param canServeCachedStateRequests bridge flag that controls cached `REQUEST_STATE` replies.
+ * @param runtimeState hot bridge-side runtime flags and timestamps to update.
  * @param details freshly received validated topology snapshot.
- * @param lastTopologySaveAttemptMs timestamp of the last deferred save attempt.
- * @param bootstrapPhase high-level synchronization phase to update.
  */
 void stageTopologyMigration(ControllerSerialLink &controllerSerialLink,
                             VirtualDevice &virtualDevice,
+                            RuntimeHotState &runtimeState,
                             DeviceDetailsSnapshot &pendingTopologyDetails,
-                            bool &hasPendingTopologySave,
-                            bool &isAuthoritativeStateDirty,
-                            bool &canServeCachedStateRequests,
-                            const DeviceDetailsSnapshot &details,
-                            std::uint32_t &lastTopologySaveAttemptMs,
-                            BootstrapPhase &bootstrapPhase)
+                            const DeviceDetailsSnapshot &details)
 {
-    clearPendingRuntimeState(controllerSerialLink, isAuthoritativeStateDirty, canServeCachedStateRequests);
+    clearPendingRuntimeState(controllerSerialLink, runtimeState);
     virtualDevice.invalidateRuntimeModel();
     pendingTopologyDetails = details;
-    hasPendingTopologySave = true;
-    lastTopologySaveAttemptMs = 0U;
-    bootstrapPhase = BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT;
+    runtimeState.hasPendingTopologySave = true;
+    runtimeState.lastTopologySaveAttemptMs = 0U;
+    runtimeState.bootstrapPhase = BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT;
 }
 
 /**
@@ -156,22 +123,13 @@ void stageTopologyMigration(ControllerSerialLink &controllerSerialLink,
  *
  * @param controllerSerialLink controller link that owns the pending actuator batch.
  * @param virtualDevice in-memory controller model that must forget its runtime state.
- * @param isAuthoritativeStateDirty bridge flag that tracks delayed state publish work.
- * @param canServeCachedStateRequests bridge flag that controls cached `REQUEST_STATE` replies.
- * @param bootstrapPhase high-level synchronization phase to update.
- * @param bootstrapRequestDue retry flag consumed by the bootstrap loop.
- * @param lastBootstrapRequestMs timestamp of the last accepted bootstrap request.
+ * @param runtimeState hot bridge-side runtime flags and timestamps to update.
  */
 void requestAuthoritativeStateRefresh(ControllerSerialLink &controllerSerialLink,
                                       VirtualDevice &virtualDevice,
-                                      bool &isAuthoritativeStateDirty,
-                                      bool &canServeCachedStateRequests,
-                                      BootstrapPhase &bootstrapPhase,
-                                      bool &bootstrapRequestDue,
-                                      std::uint32_t &lastBootstrapRequestMs)
+                                      RuntimeHotState &runtimeState)
 {
-    enterWaitingForState(controllerSerialLink, virtualDevice, isAuthoritativeStateDirty, canServeCachedStateRequests, bootstrapPhase,
-                         bootstrapRequestDue, lastBootstrapRequestMs);
+    enterWaitingForState(controllerSerialLink, virtualDevice, runtimeState);
 }
 
 /**
@@ -181,58 +139,48 @@ void requestAuthoritativeStateRefresh(ControllerSerialLink &controllerSerialLink
  *          follow-up request for the current phase.
  *
  * @param isConnectedNow freshly observed controller connectivity bit.
- * @param isControllerConnected last known connectivity bit stored by the bridge.
  * @param controllerSerialLink controller link that owns the pending actuator batch.
  * @param virtualDevice in-memory controller model that may need to invalidate its runtime state.
- * @param isAuthoritativeStateDirty bridge flag that tracks delayed state publish work.
- * @param canServeCachedStateRequests bridge flag that controls cached `REQUEST_STATE` replies.
- * @param bootstrapPhase high-level synchronization phase to update.
- * @param bootstrapRequestDue retry flag consumed by the bootstrap loop.
- * @param lastBootstrapRequestMs timestamp of the last accepted bootstrap request.
+ * @param runtimeState hot bridge-side runtime flags and timestamps that track the session lifecycle.
  */
 void refreshControllerConnectivity(bool isConnectedNow,
-                                   bool &isControllerConnected,
                                    ControllerSerialLink &controllerSerialLink,
                                    VirtualDevice &virtualDevice,
-                                   bool &isAuthoritativeStateDirty,
-                                   bool &canServeCachedStateRequests,
-                                   BootstrapPhase &bootstrapPhase,
-                                   bool &bootstrapRequestDue,
-                                   std::uint32_t &lastBootstrapRequestMs)
+                                   RuntimeHotState &runtimeState)
 {
-    if (isConnectedNow == isControllerConnected)
+    if (isConnectedNow == runtimeState.isControllerConnected)
     {
         return;
     }
 
-    isControllerConnected = isConnectedNow;
+    runtimeState.isControllerConnected = isConnectedNow;
     if (!isConnectedNow)
     {
-        clearPendingRuntimeState(controllerSerialLink, isAuthoritativeStateDirty, canServeCachedStateRequests);
+        clearPendingRuntimeState(controllerSerialLink, runtimeState);
         virtualDevice.invalidateRuntimeModel();
-        if (bootstrapPhase != BootstrapPhase::WAITING_FOR_DETAILS && bootstrapPhase != BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
+        if (runtimeState.bootstrapPhase != BootstrapPhase::WAITING_FOR_DETAILS &&
+            runtimeState.bootstrapPhase != BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
         {
-            bootstrapPhase = BootstrapPhase::WAITING_FOR_STATE;
-            scheduleBootstrapRequestNow(bootstrapRequestDue, lastBootstrapRequestMs);
+            runtimeState.bootstrapPhase = BootstrapPhase::WAITING_FOR_STATE;
+            scheduleBootstrapRequestNow(runtimeState);
         }
         return;
     }
 
-    if (bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
+    if (runtimeState.bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
     {
-        scheduleBootstrapRequestNow(bootstrapRequestDue, lastBootstrapRequestMs);
+        scheduleBootstrapRequestNow(runtimeState);
         return;
     }
 
-    if (bootstrapPhase == BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
+    if (runtimeState.bootstrapPhase == BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
     {
         return;
     }
 
     if (!virtualDevice.isRuntimeSynchronized())
     {
-        requestAuthoritativeStateRefresh(controllerSerialLink, virtualDevice, isAuthoritativeStateDirty, canServeCachedStateRequests,
-                                         bootstrapPhase, bootstrapRequestDue, lastBootstrapRequestMs);
+        requestAuthoritativeStateRefresh(controllerSerialLink, virtualDevice, runtimeState);
     }
 }
 

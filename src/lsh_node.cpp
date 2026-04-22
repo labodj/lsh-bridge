@@ -87,7 +87,7 @@ auto LSHNode::sendState() const -> bool
     DP_CONTEXT();
     DP("↑ ID: ", this->getId());
 
-    const bool stateToSend = this->virtualDevice.getStateByIndex(this->actuatorIndex);
+    const bool stateToSend = this->virtualDevice.getStateByIndexUnchecked(this->actuatorIndex);
     DPL(" | state: ", stateToSend);
 
     using constants::homie::HOMIE_PROPERTY_ADVERTISE;

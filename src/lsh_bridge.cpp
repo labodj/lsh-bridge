@@ -56,28 +56,11 @@ namespace
 
 using constants::DeserializeExitCode;
 
-/**
- * @brief Lookup table used to unpack packed actuator-state bytes.
- * @details Bit packing order is shared with the controller protocol:
- *          actuator 0 is bit 0, actuator 7 is bit 7, then packing continues
- *          into the next byte.
- */
-constexpr std::uint8_t kPackedBitMask[8] = {0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U};
 constexpr char kTopologyChangedDiagnostic[] =
     "topology_changed";  //!< Diagnostic value emitted when the controller reports a topology different from the cached one.
 constexpr std::uint16_t kTopologyChangedDiagnosticGraceMs =
     150U;  //!< Short grace window that gives the MQTT client one chance to flush `topology_changed` before rebooting.
 
-/**
- * @brief Validate one MQTT-originated network click command before forwarding it to the controller.
- *
- * @param commandDocument decoded MQTT payload.
- * @param outClickType destination click type byte written only on success.
- * @param outClickableId destination clickable ID written only on success.
- * @param outCorrelationId destination correlation ID written only on success.
- * @return true if every scalar is present and semantically valid for the controller protocol.
- * @return false otherwise.
- */
 [[nodiscard]] auto validateInboundNetworkClickCommand(const JsonDocument &commandDocument,
                                                       std::uint8_t &outClickType,
                                                       std::uint8_t &outClickableId,
@@ -165,37 +148,29 @@ public:
     using BootstrapPhase = runtime::BootstrapPhase;
 
     explicit Impl(BridgeOptions bridgeOptions) :
-        options(std::move(bridgeOptions)), serial(resolveSerial(options.serial)), controllerSerialLink(serial, virtualDevice)
+        serial(resolveSerial(bridgeOptions.serial)), controllerSerialLink(serial, virtualDevice), options(bridgeOptions)
     {
         options.serial = serial;
     }
 
-    BridgeOptions options{};
-    bool isStarted = false;  //!< True after `begin()` has fully wired serial, Homie and callbacks.
-    BootstrapPhase bootstrapPhase = BootstrapPhase::WAITING_FOR_DETAILS;  //!< Current high-level controller sync phase.
-    bool bootstrapRequestDue = true;                                      //!< True when the next bootstrap request may be sent immediately.
-    bool hasPendingTopologySave = false;       //!< True while a changed topology still has to be persisted to NVS.
-    bool isAuthoritativeStateDirty = false;    //!< True after fresh controller state arrived but is not yet mirrored to MQTT/Homie.
-    bool canServeCachedStateRequests = false;  //!< True only after this MQTT session has already seen one fresh controller-backed state.
-    bool isControllerConnected = false;        //!< Last known controller connectivity bit, used to detect link transitions.
+    HardwareSerial *const serial;
+    bool isStarted = false;          //!< True after `begin()` has fully wired serial, Homie and callbacks.
     bool mqttResyncPending = false;  //!< True while MQTT-side resync still needs another retry after reconnect or publish refusal.
     bool topologyChangedDiagnosticPending =
         false;                                   //!< True while `topology_changed` still needs one best-effort MQTT publish before reboot.
-    std::uint32_t lastBootstrapRequestMs = 0U;   //!< Real-time timestamp of the last `ASK_DETAILS` or `ASK_STATE`.
     std::uint32_t lastMqttResyncAttemptMs = 0U;  //!< Real-time timestamp of the last autonomous MQTT-side resync attempt.
-    std::uint32_t lastTopologySaveAttemptMs = 0U;  //!< Real-time timestamp of the last deferred NVS save attempt.
     std::uint32_t topologyRebootPendingSinceMs =
         0U;  //!< Real-time timestamp of the successful topology save that started the reboot window.
-    std::uint32_t topologyDiagnosticAcceptedMs = 0U;    //!< Real-time timestamp of the accepted `topology_changed` MQTT publish, if any.
-    std::uint32_t lastAuthoritativeStateUpdateMs = 0U;  //!< Real-time timestamp of the latest accepted authoritative state frame.
-    etl::vector<LSHNode, constants::virtualDevice::MAX_ACTUATORS> homieNodes{};
-    DeviceDetailsSnapshot pendingTopologyDetails{};  //!< Validated topology waiting to be persisted before a controlled reboot.
+    std::uint32_t topologyDiagnosticAcceptedMs = 0U;  //!< Real-time timestamp of the accepted `topology_changed` MQTT publish, if any.
+    runtime::RuntimeHotState runtimeState{};          //!< Hot controller-sync state grouped for locality and helper passing.
     VirtualDevice virtualDevice{};
-    HardwareSerial *const serial;
     ControllerSerialLink controllerSerialLink;
     AsyncMqttClient *mqttClient = nullptr;
     AsyncMqttClient *mqttMessageBoundClient = nullptr;
     MqttCommandQueue mqttCommandQueue{};
+    BridgeOptions options{};
+    etl::vector<LSHNode, constants::virtualDevice::MAX_ACTUATORS> homieNodes{};
+    DeviceDetailsSnapshot pendingTopologyDetails{};  //!< Validated topology waiting to be persisted before a controlled reboot.
 
     void configureHomie() const
     {
@@ -297,7 +272,7 @@ public:
      */
     [[nodiscard]] auto bootstrapPhaseName() const -> const char *
     {
-        return runtime::bootstrapPhaseName(bootstrapPhase);
+        return runtime::bootstrapPhaseName(runtimeState.bootstrapPhase);
     }
 
     /**
@@ -306,7 +281,7 @@ public:
      */
     void clearPendingRuntimeState()
     {
-        runtime::clearPendingRuntimeState(controllerSerialLink, isAuthoritativeStateDirty, canServeCachedStateRequests);
+        runtime::clearPendingRuntimeState(controllerSerialLink, runtimeState);
     }
 
     /**
@@ -316,7 +291,7 @@ public:
      */
     void scheduleBootstrapRequestNow()
     {
-        runtime::scheduleBootstrapRequestNow(bootstrapRequestDue, lastBootstrapRequestMs);
+        runtime::scheduleBootstrapRequestNow(runtimeState);
     }
 
     /**
@@ -327,8 +302,7 @@ public:
      */
     void enterWaitingForDetails()
     {
-        runtime::enterWaitingForDetails(controllerSerialLink, virtualDevice, isAuthoritativeStateDirty, canServeCachedStateRequests,
-                                        bootstrapPhase, bootstrapRequestDue, lastBootstrapRequestMs);
+        runtime::enterWaitingForDetails(controllerSerialLink, virtualDevice, runtimeState);
     }
 
     /**
@@ -341,8 +315,7 @@ public:
      */
     void enterWaitingForState()
     {
-        runtime::enterWaitingForState(controllerSerialLink, virtualDevice, isAuthoritativeStateDirty, canServeCachedStateRequests,
-                                      bootstrapPhase, bootstrapRequestDue, lastBootstrapRequestMs);
+        runtime::enterWaitingForState(controllerSerialLink, virtualDevice, runtimeState);
     }
 
     /**
@@ -358,9 +331,7 @@ public:
      */
     void stageTopologyMigration(const DeviceDetailsSnapshot &details)
     {
-        runtime::stageTopologyMigration(controllerSerialLink, virtualDevice, pendingTopologyDetails, hasPendingTopologySave,
-                                        isAuthoritativeStateDirty, canServeCachedStateRequests, details, lastTopologySaveAttemptMs,
-                                        bootstrapPhase);
+        runtime::stageTopologyMigration(controllerSerialLink, virtualDevice, runtimeState, pendingTopologyDetails, details);
     }
 
     /**
@@ -398,8 +369,7 @@ public:
      */
     void requestAuthoritativeStateRefresh()
     {
-        runtime::requestAuthoritativeStateRefresh(controllerSerialLink, virtualDevice, isAuthoritativeStateDirty,
-                                                  canServeCachedStateRequests, bootstrapPhase, bootstrapRequestDue, lastBootstrapRequestMs);
+        runtime::requestAuthoritativeStateRefresh(controllerSerialLink, virtualDevice, runtimeState);
     }
 
     /**
@@ -423,8 +393,8 @@ public:
     {
         if (!virtualDevice.hasCachedDetails())
         {
-            canServeCachedStateRequests = false;
-            bootstrapPhase = BootstrapPhase::WAITING_FOR_DETAILS;
+            runtimeState.canServeCachedStateRequests = false;
+            runtimeState.bootstrapPhase = BootstrapPhase::WAITING_FOR_DETAILS;
             scheduleBootstrapRequestNow();
             mqttResyncPending = false;
             return true;
@@ -432,7 +402,7 @@ public:
 
         if (!publishCachedDetails())
         {
-            canServeCachedStateRequests = false;
+            runtimeState.canServeCachedStateRequests = false;
             mqttResyncPending = true;
             return false;
         }
@@ -442,28 +412,28 @@ public:
         {
             if (!publishAuthoritativeLshState())
             {
-                canServeCachedStateRequests = false;
+                runtimeState.canServeCachedStateRequests = false;
                 mqttResyncPending = true;
                 return false;
             }
 
             const bool homiePublished = publishAllHomieNodeStates();
-            canServeCachedStateRequests = homiePublished;
+            runtimeState.canServeCachedStateRequests = homiePublished;
             mqttResyncPending = !homiePublished;
             return homiePublished;
         }
 
-        canServeCachedStateRequests = false;
+        runtimeState.canServeCachedStateRequests = false;
         virtualDevice.invalidateRuntimeModel();
         mqttResyncPending = false;
 
-        if (bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
+        if (runtimeState.bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
         {
             scheduleBootstrapRequestNow();
             return true;
         }
 
-        if (bootstrapPhase != BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
+        if (runtimeState.bootstrapPhase != BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
         {
             enterWaitingForState();
         }
@@ -509,9 +479,7 @@ public:
     void refreshControllerConnectivity()
     {
         const bool isConnectedNow = controllerSerialLink.isConnected();
-        runtime::refreshControllerConnectivity(isConnectedNow, isControllerConnected, controllerSerialLink, virtualDevice,
-                                               isAuthoritativeStateDirty, canServeCachedStateRequests, bootstrapPhase, bootstrapRequestDue,
-                                               lastBootstrapRequestMs);
+        runtime::refreshControllerConnectivity(isConnectedNow, controllerSerialLink, virtualDevice, runtimeState);
     }
 
     /**
@@ -595,31 +563,34 @@ public:
      */
     void processBootstrapProgress()
     {
-        if (bootstrapPhase == BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
+        if (runtimeState.bootstrapPhase == BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
         {
             return;
         }
 
-        if (bootstrapPhase != BootstrapPhase::WAITING_FOR_DETAILS && bootstrapPhase != BootstrapPhase::WAITING_FOR_STATE)
+        if (runtimeState.bootstrapPhase != BootstrapPhase::WAITING_FOR_DETAILS &&
+            runtimeState.bootstrapPhase != BootstrapPhase::WAITING_FOR_STATE)
         {
             return;
         }
 
         const auto now = timeKeeper::getRealTime();
-        if (!bootstrapRequestDue && (now - lastBootstrapRequestMs) < constants::runtime::BOOTSTRAP_REQUEST_INTERVAL_MS)
+        if (!runtimeState.bootstrapRequestDue &&
+            (now - runtimeState.lastBootstrapRequestMs) < constants::runtime::BOOTSTRAP_REQUEST_INTERVAL_MS)
         {
             return;
         }
 
-        const auto requestType = bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS ? constants::payloads::StaticType::ASK_DETAILS
-                                                                                       : constants::payloads::StaticType::ASK_STATE;
+        const auto requestType = runtimeState.bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS
+                                     ? constants::payloads::StaticType::ASK_DETAILS
+                                     : constants::payloads::StaticType::ASK_STATE;
         if (!controllerSerialLink.sendJson(requestType))
         {
             return;
         }
 
-        lastBootstrapRequestMs = now;
-        bootstrapRequestDue = false;
+        runtimeState.lastBootstrapRequestMs = now;
+        runtimeState.bootstrapRequestDue = false;
     }
 
     /**
@@ -636,13 +607,13 @@ public:
      */
     void processPendingTopologyMigration()
     {
-        if (bootstrapPhase != BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
+        if (runtimeState.bootstrapPhase != BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
         {
             return;
         }
 
         const auto now = timeKeeper::getRealTime();
-        if (!hasPendingTopologySave)
+        if (!runtimeState.hasPendingTopologySave)
         {
             if (topologyChangedDiagnosticPending && publishSimpleBridgeDiagnostic(kTopologyChangedDiagnostic))
             {
@@ -661,18 +632,19 @@ public:
             return;
         }
 
-        if (lastTopologySaveAttemptMs != 0U && (now - lastTopologySaveAttemptMs) < constants::runtime::TOPOLOGY_SAVE_RETRY_INTERVAL_MS)
+        if (runtimeState.lastTopologySaveAttemptMs != 0U &&
+            (now - runtimeState.lastTopologySaveAttemptMs) < constants::runtime::TOPOLOGY_SAVE_RETRY_INTERVAL_MS)
         {
             return;
         }
 
-        lastTopologySaveAttemptMs = now;
+        runtimeState.lastTopologySaveAttemptMs = now;
         if (!DetailsCacheStore::save(pendingTopologyDetails))
         {
             return;
         }
 
-        hasPendingTopologySave = false;
+        runtimeState.hasPendingTopologySave = false;
         topologyChangedDiagnosticPending = true;
         topologyRebootPendingSinceMs = now;
         topologyDiagnosticAcceptedMs = 0U;
@@ -682,9 +654,9 @@ public:
     {
         // A fresh controller-backed state arrived. Delay publication slightly so
         // quick successive state frames collapse into one MQTT/Homie refresh wave.
-        isAuthoritativeStateDirty = true;
-        canServeCachedStateRequests = false;
-        lastAuthoritativeStateUpdateMs = timeKeeper::getRealTime();
+        runtimeState.isAuthoritativeStateDirty = true;
+        runtimeState.canServeCachedStateRequests = false;
+        runtimeState.lastAuthoritativeStateUpdateMs = timeKeeper::getRealTime();
     }
 
     /**
@@ -708,26 +680,12 @@ public:
         stateDoc[KEY_PAYLOAD] = static_cast<std::uint8_t>(Command::ACTUATORS_STATE);
         JsonArray packedStates = stateDoc.createNestedArray(KEY_STATE);
 
-        const auto totalActuators = virtualDevice.getTotalActuators();
-        std::uint8_t packedByte = 0U;
-
-        for (std::uint8_t actuatorIndex = 0U; actuatorIndex < totalActuators; ++actuatorIndex)
+        // The virtual device already stores the authoritative state in the same
+        // compact bit order used on MQTT, so publishing is just a byte export.
+        const auto packedByteCount = virtualDevice.getPackedStateByteCount();
+        for (std::uint8_t byteIndex = 0U; byteIndex < packedByteCount; ++byteIndex)
         {
-            if (virtualDevice.getStateByIndex(actuatorIndex))
-            {
-                // `actuatorIndex & 0x07U` is equivalent to `actuatorIndex % 8`, but it
-                // makes it explicit that only the bit position inside the current byte
-                // matters here.
-                packedByte |= kPackedBitMask[actuatorIndex & 0x07U];
-            }
-
-            const bool isEndOfPackedByte = ((actuatorIndex & 0x07U) == 0x07U);
-            const bool isLastActuator = (actuatorIndex == (totalActuators - 1U));
-            if (isEndOfPackedByte || isLastActuator)
-            {
-                packedStates.add(packedByte);
-                packedByte = 0U;
-            }
+            packedStates.add(virtualDevice.getPackedStateByte(byteIndex));
         }
 
         return MqttPublisher::sendJson(stateDoc, MqttTopicsBuilder::mqttOutStateTopic.c_str(), true, 1);
@@ -745,7 +703,7 @@ public:
      */
     [[nodiscard]] auto tryServeCachedStateRequest() -> bool
     {
-        if (!canServeCachedStateRequests || !virtualDevice.isRuntimeSynchronized() || !controllerSerialLink.isConnected() ||
+        if (!runtimeState.canServeCachedStateRequests || !virtualDevice.isRuntimeSynchronized() || !controllerSerialLink.isConnected() ||
             !hasDeviceScopedTopics())
         {
             return false;
@@ -774,7 +732,7 @@ public:
         bool allPublished = true;
         for (std::uint8_t actuatorIndex = 0U; actuatorIndex < virtualDevice.getTotalActuators(); ++actuatorIndex)
         {
-            if (virtualDevice.isActuatorDirty(actuatorIndex))
+            if (virtualDevice.isActuatorDirtyUnchecked(actuatorIndex))
             {
                 if (!homieNodes[actuatorIndex].sendState())
                 {
@@ -792,13 +750,13 @@ public:
      */
     void processPendingStatePublishes()
     {
-        if (!isAuthoritativeStateDirty)
+        if (!runtimeState.isAuthoritativeStateDirty)
         {
             return;
         }
 
         const auto now = timeKeeper::getRealTime();
-        if ((now - lastAuthoritativeStateUpdateMs) < constants::runtime::STATE_PUBLISH_SETTLE_INTERVAL_MS)
+        if ((now - runtimeState.lastAuthoritativeStateUpdateMs) < constants::runtime::STATE_PUBLISH_SETTLE_INTERVAL_MS)
         {
             return;
         }
@@ -834,8 +792,8 @@ public:
             virtualDevice.clearFullStatePublishPending();
         }
         virtualDevice.clearDirtyActuators();
-        isAuthoritativeStateDirty = false;
-        canServeCachedStateRequests = true;
+        runtimeState.isAuthoritativeStateDirty = false;
+        runtimeState.canServeCachedStateRequests = true;
     }
 
     /**
@@ -870,7 +828,7 @@ public:
 
         if (virtualDevice.matchesDetails(receivedDetails))
         {
-            hasPendingTopologySave = false;
+            runtimeState.hasPendingTopologySave = false;
             pendingTopologyDetails.clear();
             enterWaitingForState();
             return;
@@ -890,7 +848,8 @@ public:
      */
     void handleControllerStateMessage()
     {
-        if (bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS || bootstrapPhase == BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
+        if (runtimeState.bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS ||
+            runtimeState.bootstrapPhase == BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
         {
             return;
         }
@@ -899,7 +858,7 @@ public:
         if (stateResult == DeserializeExitCode::OK_STATE)
         {
             controllerSerialLink.reconcileDesiredActuatorStatesFromAuthoritative();
-            bootstrapPhase = BootstrapPhase::SYNCED;
+            runtimeState.bootstrapPhase = BootstrapPhase::SYNCED;
             markAuthoritativeStateDirty();
             return;
         }
@@ -1108,11 +1067,10 @@ public:
      * @return TypedCommandResult::DeliveryFailed when the command was valid but
      *         the bridge could not deliver the resulting publish or serial write.
      */
-    [[nodiscard]] auto forwardTypedControllerCommand(const JsonDocument &commandDocument) -> TypedCommandResult
+    [[nodiscard]] auto forwardTypedControllerCommand(lsh::bridge::protocol::Command command, const JsonDocument &commandDocument)
+        -> TypedCommandResult
     {
         using namespace lsh::bridge::protocol;
-
-        const auto command = static_cast<Command>(commandDocument[KEY_PAYLOAD].as<std::uint8_t>());
 
         switch (command)
         {
@@ -1135,7 +1093,7 @@ public:
             // backed snapshot from the current session. Otherwise ask the controller.
             if (!tryServeCachedStateRequest() && controllerSerialLink.isConnected())
             {
-                if (!virtualDevice.hasCachedDetails() || bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
+                if (!virtualDevice.hasCachedDetails() || runtimeState.bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
                 {
                     enterWaitingForDetails();
                 }
@@ -1292,7 +1250,7 @@ public:
             break;
         }
 
-        const auto typedCommandResult = forwardTypedControllerCommand(commandDocument);
+        const auto typedCommandResult = forwardTypedControllerCommand(command, commandDocument);
         if (typedCommandResult == TypedCommandResult::Handled)
         {
             return;
@@ -1473,17 +1431,13 @@ public:
                            std::size_t index,
                            std::size_t total)
     {
-        // Topic hashes keep the hot callback cheap, but a final string compare is
-        // still required so a rare hash collision cannot route a foreign topic
-        // into the bridge command handler.
-        const auto topicHash = djb2_hash(topic);
         MqttCommandSource source = MqttCommandSource::Device;
 
-        if (topicHash == MqttTopicsBuilder::mqttInTopicHash && std::strcmp(topic, MqttTopicsBuilder::mqttInTopic.c_str()) == 0)
+        if (std::strcmp(topic, MqttTopicsBuilder::mqttInTopic.c_str()) == 0)
         {
             source = MqttCommandSource::Device;
         }
-        else if (topicHash == constants::mqtt::MQTT_TOPIC_SERVICE_HASH && std::strcmp(topic, constants::mqtt::MQTT_TOPIC_SERVICE) == 0)
+        else if (std::strcmp(topic, constants::mqtt::MQTT_TOPIC_SERVICE) == 0)
         {
             source = MqttCommandSource::Service;
         }
@@ -1549,7 +1503,7 @@ LSHBridge *LSHBridge::activeInstance = nullptr;
  *
  * @param options runtime options.
  */
-LSHBridge::LSHBridge(BridgeOptions options) : implementation(std::make_unique<Impl>(std::move(options)))
+LSHBridge::LSHBridge(BridgeOptions options) : implementation(std::make_unique<Impl>(options))
 {}
 
 /**
@@ -1589,7 +1543,7 @@ void LSHBridge::begin()
     (void)this->implementation->loadCachedDetailsFromFlash();
     this->implementation->configureHomie();
     Homie.onEvent(onHomieEventStatic);
-    this->implementation->isControllerConnected = this->implementation->controllerSerialLink.isConnected();
+    this->implementation->runtimeState.isControllerConnected = this->implementation->controllerSerialLink.isConnected();
 
     auto runtimeDelegate = ControllerSerialLink::MessageCallback::create<Impl, &Impl::handleControllerSerialMessage>(*this->implementation);
     this->implementation->controllerSerialLink.onMessage(runtimeDelegate);

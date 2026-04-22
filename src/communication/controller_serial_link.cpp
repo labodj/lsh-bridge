@@ -24,9 +24,12 @@
 #include <cstddef>
 #include <cstring>
 
+#include <Print.h>
+
 #include <ArduinoJson.h>
 #include <etl/bitset.h>
 
+#include "communication/checked_writer.hpp"
 #include "constants/controller_serial.hpp"
 #include "constants/communication_protocol.hpp"
 #include "constants/configs/ping.hpp"
@@ -56,12 +59,67 @@ struct ValidatedNetworkClickPayload
     std::uint8_t correlationId = 0U;
 };
 
+using DesiredActuatorStateBitset = ControllerSerialLink::DesiredActuatorStateBitset;
+
 /**
  * @brief Lookup table used to unpack one packed state byte into 8 boolean actuator states.
  * @details Keeping the masks in a table makes the unpacking loop easy to read and
  *          avoids repeated shift operations on smaller microcontrollers.
  */
 constexpr std::uint8_t kPackedBitMask[8] = {0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U};
+
+/**
+ * @brief Append one packed state snapshot to a JSON array in protocol wire order.
+ * @details Both authoritative state and desired-state shadow already live as
+ *          dense bitsets, so outbound `SET_STATE` and MQTT `ACTUATORS_STATE`
+ *          frames can emit byte slices directly instead of repacking per actuator.
+ */
+template <typename TBitset> void appendPackedStateBytes(const TBitset &stateBits, std::uint8_t totalActuators, JsonArray packedStates)
+{
+    const std::uint8_t byteCount = static_cast<std::uint8_t>((static_cast<std::size_t>(totalActuators) + 7U) / 8U);
+    for (std::uint8_t byteIndex = 0U; byteIndex < byteCount; ++byteIndex)
+    {
+        const std::size_t bitOffset = static_cast<std::size_t>(byteIndex) * 8U;
+        const std::size_t remainingBits = static_cast<std::size_t>(totalActuators) - bitOffset;
+        const std::size_t extractedBits = remainingBits < 8U ? remainingBits : 8U;
+        // The last packed byte may expose fewer than 8 live actuator bits, so
+        // `extract()` is explicitly bounded to the valid tail length.
+        packedStates.add(stateBits.template extract<std::uint8_t>(bitOffset, extractedBits));
+    }
+}
+
+/**
+ * @brief Decode one packed desired-state payload into the bridge-side desired shadow form.
+ *
+ * @param packedBytes inbound packed bytes from MQTT `SET_STATE`.
+ * @param totalActuators actuator count expected by the current cached topology.
+ * @param outState destination desired-state bitset populated only on success.
+ * @return true if every packed byte is a valid uint8 scalar and the payload shape matches the topology.
+ * @return false otherwise.
+ */
+auto decodeDesiredPackedState(const JsonArrayConst &packedBytes, std::uint8_t totalActuators, DesiredActuatorStateBitset &outState) -> bool
+{
+    outState.reset();
+    std::uint8_t actuatorIndex = 0U;
+
+    for (const JsonVariantConst packedByteVariant : packedBytes)
+    {
+        std::uint8_t packedByte = 0U;
+        if (!utils::json::tryGetUint8Scalar(packedByteVariant, packedByte))
+        {
+            outState.reset();
+            return false;
+        }
+
+        for (std::uint8_t bitIndex = 0U; bitIndex < 8U && actuatorIndex < totalActuators; ++bitIndex)
+        {
+            outState.set(actuatorIndex, (packedByte & kPackedBitMask[bitIndex]) != 0U);
+            ++actuatorIndex;
+        }
+    }
+
+    return true;
+}
 
 /**
  * @brief Copy one JSON ID array into an ETL vector while validating every element.
@@ -374,26 +432,26 @@ auto ControllerSerialLink::sendJson(const JsonDocument &json) -> bool
     DP("↑ Json to send: ");
     DPJ(json);
 #ifdef CONFIG_MSG_PACK_ARDUINO
-    const std::size_t expectedPayloadBytes = measureMsgPack(json);
     MsgPackFrameWriter framedWriter(*this->serial);
     if (!framedWriter.beginFrame())
     {
         return false;
     }
 
-    const std::size_t writtenPayloadBytes = serializeMsgPack(json, framedWriter);
+    lsh::bridge::communication::CheckedWriter<Print> checkedWriter(framedWriter);
+    const std::size_t writtenPayloadBytes = serializeMsgPack(json, checkedWriter);
     const bool frameEnded = framedWriter.endFrame();
-    if (writtenPayloadBytes == 0U || writtenPayloadBytes != expectedPayloadBytes || !frameEnded)
+    if (writtenPayloadBytes == 0U || checkedWriter.failed() || !frameEnded)
     {
         return false;
     }
 #else
-    const std::size_t expectedPayloadBytes = measureJson(json);
-    const std::size_t writtenPayloadBytes = serializeJson(json, (*this->serial));
+    lsh::bridge::communication::CheckedWriter<Print> checkedWriter(*this->serial);
+    const std::size_t writtenPayloadBytes = serializeJson(json, checkedWriter);
     // Append the newline delimiter ONLY for JSON-based communication.
     // MsgPack doesn't need it.
-    const std::size_t writtenDelimiterBytes = this->serial->write("\n", 1);
-    if (writtenPayloadBytes != expectedPayloadBytes || writtenDelimiterBytes != 1U)
+    const std::size_t writtenDelimiterBytes = checkedWriter.write(static_cast<std::uint8_t>('\n'));
+    if (writtenPayloadBytes == 0U || writtenDelimiterBytes != 1U || checkedWriter.failed())
     {
         return false;
     }
@@ -443,10 +501,7 @@ auto ControllerSerialLink::sendJson(const char *buffer, size_t length) -> bool
  */
 void ControllerSerialLink::realignDesiredStateShadowWithAuthoritativeLocked()
 {
-    for (std::uint8_t actuatorIndex = 0U; actuatorIndex < this->virtualDevice.getTotalActuators(); ++actuatorIndex)
-    {
-        this->desiredActuatorStates[actuatorIndex] = this->virtualDevice.getStateByIndex(actuatorIndex);
-    }
+    this->desiredActuatorStates = this->virtualDevice.getStateBits();
 }
 
 /**
@@ -475,7 +530,7 @@ void ControllerSerialLink::clearPendingActuatorBatchLocked()
 void ControllerSerialLink::refreshPendingActuatorBatchStateLocked(bool restartSettleWindow, bool markNewMutation)
 {
     const bool wasBatchPending = this->actuatorCommandBatchPending;
-    this->actuatorCommandBatchPending = (this->desiredDirtyActuators.count() > 0U);
+    this->actuatorCommandBatchPending = this->desiredDirtyActuators.any();
     if (!this->actuatorCommandBatchPending)
     {
         this->firstDesiredActuatorUpdate_ms = 0U;
@@ -523,21 +578,21 @@ auto ControllerSerialLink::stageSingleActuatorCommand(uint8_t actuatorId, bool s
         return false;
     }
 
-    const bool authoritativeState = this->virtualDevice.getStateByIndex(actuatorIndex);
+    const bool authoritativeState = this->virtualDevice.getStateByIndexUnchecked(actuatorIndex);
 
     this->lockActuatorCommandState();
     // If this exact actuator already has the same target value staged in the
     // currently pending batch, treat the repeat as a no-op so it doesn't keep
     // stretching the settle window for everyone else.
     if (this->actuatorCommandBatchPending && this->desiredDirtyActuators.test(actuatorIndex) &&
-        this->desiredActuatorStates[actuatorIndex] == state)
+        this->desiredActuatorStates.test(actuatorIndex) == state)
     {
         DPL("Ignoring duplicate pending actuator command for ID ", actuatorId);
         this->unlockActuatorCommandState();
         return true;
     }
 
-    this->desiredActuatorStates[actuatorIndex] = state;
+    this->desiredActuatorStates.set(actuatorIndex, state);
     if (state == authoritativeState)
     {
         // If the requested state already matches reality, there is nothing left to
@@ -579,39 +634,14 @@ auto ControllerSerialLink::stageDesiredPackedState(const JsonArrayConst &packedB
         return true;
     }
 
-    bool desiredSnapshot[constants::virtualDevice::MAX_ACTUATORS]{};
-    std::uint8_t actuatorIndex = 0U;
-
-    // First validate and unpack the payload outside the critical section. The
-    // lock is only taken once the whole snapshot is known to be well-formed.
-    for (JsonVariantConst packedByteVariant : packedBytes)
+    DesiredActuatorStateBitset desiredSnapshot{};
+    if (!decodeDesiredPackedState(packedBytes, totalActuators, desiredSnapshot))
     {
-        std::uint8_t packedByte = 0U;
-        if (!utils::json::tryGetUint8Scalar(packedByteVariant, packedByte))
-        {
-            return false;
-        }
-
-        for (std::uint8_t bitIndex = 0U; bitIndex < 8U && actuatorIndex < totalActuators; ++bitIndex)
-        {
-            desiredSnapshot[actuatorIndex] = (packedByte & kPackedBitMask[bitIndex]) != 0U;
-            ++actuatorIndex;
-        }
+        return false;
     }
 
     this->lockActuatorCommandState();
-    bool snapshotAlreadyPending = this->actuatorCommandBatchPending;
-    if (snapshotAlreadyPending)
-    {
-        for (std::uint8_t index = 0U; index < totalActuators; ++index)
-        {
-            if (this->desiredActuatorStates[index] != desiredSnapshot[index])
-            {
-                snapshotAlreadyPending = false;
-                break;
-            }
-        }
-    }
+    const bool snapshotAlreadyPending = this->actuatorCommandBatchPending && this->desiredActuatorStates == desiredSnapshot;
 
     // Repeating the exact same full-state snapshot while it is already pending
     // should not restart the settle window.
@@ -622,15 +652,10 @@ auto ControllerSerialLink::stageDesiredPackedState(const JsonArrayConst &packedB
         return true;
     }
 
-    this->desiredDirtyActuators.reset();
-    for (std::uint8_t index = 0U; index < totalActuators; ++index)
-    {
-        this->desiredActuatorStates[index] = desiredSnapshot[index];
-        if (desiredSnapshot[index] != this->virtualDevice.getStateByIndex(index))
-        {
-            this->desiredDirtyActuators.set(index);
-        }
-    }
+    // Keep the full desired snapshot, then derive the dirty mask as
+    // "desired differs from controller-confirmed reality".
+    this->desiredActuatorStates = desiredSnapshot;
+    this->desiredDirtyActuators = desiredSnapshot ^ this->virtualDevice.getStateBits();
     this->refreshPendingActuatorBatchStateLocked(true, true);
     this->unlockActuatorCommandState();
 
@@ -661,17 +686,12 @@ void ControllerSerialLink::processPendingActuatorBatch()
         return;
     }
 
-    bool desiredSnapshot[constants::virtualDevice::MAX_ACTUATORS]{};
     bool batchPending = false;
     std::uint32_t firstDesiredUpdate_ms = 0U;
     std::uint32_t lastDesiredUpdate_ms = 0U;
     std::uint16_t pendingMutationCount = 0U;
 
     this->lockActuatorCommandState();
-    for (std::uint8_t actuatorIndex = 0U; actuatorIndex < totalActuators; ++actuatorIndex)
-    {
-        desiredSnapshot[actuatorIndex] = this->desiredActuatorStates[actuatorIndex];
-    }
     batchPending = this->actuatorCommandBatchPending;
     firstDesiredUpdate_ms = this->firstDesiredActuatorUpdate_ms;
     lastDesiredUpdate_ms = this->lastDesiredActuatorUpdate_ms;
@@ -694,6 +714,10 @@ void ControllerSerialLink::processPendingActuatorBatch()
         return;
     }
 
+    // Snapshot under the same mutex used by staging so the later "serialize and
+    // send" step cannot observe a half-updated desired-state batch.
+    const DesiredActuatorStateBitset desiredSnapshot = this->desiredActuatorStates;
+
     if (pendingWindowExceeded || mutationBudgetExceeded)
     {
         // This is the "command storm" safety valve. The bridge prefers to
@@ -713,17 +737,7 @@ void ControllerSerialLink::processPendingActuatorBatch()
         return;
     }
 
-    bool differsFromAuthoritative = false;
-    for (std::uint8_t actuatorIndex = 0U; actuatorIndex < totalActuators; ++actuatorIndex)
-    {
-        if (desiredSnapshot[actuatorIndex] != this->virtualDevice.getStateByIndex(actuatorIndex))
-        {
-            differsFromAuthoritative = true;
-            break;
-        }
-    }
-
-    if (!differsFromAuthoritative)
+    if (desiredSnapshot == this->virtualDevice.getStateBits())
     {
         this->desiredDirtyActuators.reset();
         this->refreshPendingActuatorBatchStateLocked();
@@ -737,25 +751,7 @@ void ControllerSerialLink::processPendingActuatorBatch()
     this->serializationDoc.clear();
     this->serializationDoc[KEY_PAYLOAD] = static_cast<uint8_t>(Command::SET_STATE);
     auto packedStates = this->serializationDoc.createNestedArray(KEY_STATE);
-
-    std::uint8_t packedByte = 0U;
-    for (std::uint8_t actuatorIndex = 0U; actuatorIndex < totalActuators; ++actuatorIndex)
-    {
-        if (desiredSnapshot[actuatorIndex])
-        {
-            // `actuatorIndex & 0x07U` means "bit position inside the current output
-            // byte". Every 8 actuators one packed byte is emitted.
-            packedByte |= kPackedBitMask[actuatorIndex & 0x07U];
-        }
-
-        const bool endOfPackedByte = ((actuatorIndex & 0x07U) == 0x07U);
-        const bool lastActuator = actuatorIndex == (totalActuators - 1U);
-        if (endOfPackedByte || lastActuator)
-        {
-            packedStates.add(packedByte);
-            packedByte = 0U;
-        }
-    }
+    appendPackedStateBytes(desiredSnapshot, totalActuators, packedStates);
 
     if (!this->sendJson(this->serializationDoc))
     {
@@ -791,31 +787,16 @@ void ControllerSerialLink::clearPendingActuatorBatch()
  */
 void ControllerSerialLink::reconcileDesiredActuatorStatesFromAuthoritative()
 {
-    const auto totalActuators = this->virtualDevice.getTotalActuators();
+    const auto authoritativeState = this->virtualDevice.getStateBits();
 
     this->lockActuatorCommandState();
     if (this->actuatorCommandBatchPending)
     {
-        for (std::uint8_t actuatorIndex = 0U; actuatorIndex < totalActuators; ++actuatorIndex)
-        {
-            const bool authoritativeState = this->virtualDevice.getStateByIndex(actuatorIndex);
-            if (this->desiredDirtyActuators.test(actuatorIndex))
-            {
-                // This actuator has an unconfirmed target. If the controller
-                // reports that target as real, the pending intent has been satisfied.
-                if (this->desiredActuatorStates[actuatorIndex] == authoritativeState)
-                {
-                    this->desiredDirtyActuators.reset(actuatorIndex);
-                }
-            }
-            else
-            {
-                // No pending remote intent for this actuator: keep the desired shadow
-                // aligned with the newly received authoritative reality.
-                this->desiredActuatorStates[actuatorIndex] = authoritativeState;
-            }
-        }
-
+        const DesiredActuatorStateBitset previousDesired = this->desiredActuatorStates;
+        // Keep only the intents still not satisfied by the fresh authoritative state,
+        // then let all non-dirty positions snap back to controller-confirmed reality.
+        this->desiredDirtyActuators &= (previousDesired ^ authoritativeState);
+        this->desiredActuatorStates = (previousDesired & this->desiredDirtyActuators) | (authoritativeState & ~this->desiredDirtyActuators);
         const bool wasBatchPending = this->actuatorCommandBatchPending;
         this->refreshPendingActuatorBatchStateLocked();
         if (wasBatchPending && !this->actuatorCommandBatchPending)
@@ -828,7 +809,7 @@ void ControllerSerialLink::reconcileDesiredActuatorStatesFromAuthoritative()
     {
         // When no batch is pending, the whole desired shadow simply tracks the
         // latest authoritative state one-to-one.
-        this->realignDesiredStateShadowWithAuthoritativeLocked();
+        this->desiredActuatorStates = authoritativeState;
         this->desiredDirtyActuators.reset();
         this->refreshPendingActuatorBatchStateLocked();
     }
@@ -1026,16 +1007,11 @@ auto ControllerSerialLink::deserialize() -> constants::DeserializeExitCode
     DP_CONTEXT();
     using namespace lsh::bridge::protocol;
 
-    const JsonVariantConst commandVariant = this->receivedDoc[KEY_PAYLOAD];
-    if (commandVariant.isNull())
-    {
-        return DeserializeExitCode::ERR_MISSING_KEY_PAYLOAD;
-    }
-
     std::uint8_t rawCommandId = 0U;
-    if (!utils::json::tryGetUint8Scalar(commandVariant, rawCommandId))
+    if (!utils::json::tryGetUint8Scalar(this->receivedDoc[KEY_PAYLOAD], rawCommandId))
     {
-        return DeserializeExitCode::ERR_UNKNOWN_PAYLOAD;
+        return this->receivedDoc[KEY_PAYLOAD].isNull() ? DeserializeExitCode::ERR_MISSING_KEY_PAYLOAD
+                                                       : DeserializeExitCode::ERR_UNKNOWN_PAYLOAD;
     }
 
     switch (static_cast<Command>(rawCommandId))

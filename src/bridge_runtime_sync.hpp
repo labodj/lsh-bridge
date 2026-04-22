@@ -40,55 +40,65 @@ enum class BootstrapPhase : std::uint8_t
     TOPOLOGY_MIGRATION_PENDING_REBOOT  //!< A new topology was staged and the bridge now waits for a controlled reboot.
 };
 
-void clearPendingRuntimeState(ControllerSerialLink &controllerSerialLink,
-                              bool &isAuthoritativeStateDirty,
-                              bool &canServeCachedStateRequests);
+/**
+ * @brief Hot bridge/runtime flags and timestamps that are touched repeatedly in the main loop.
+ */
+struct RuntimeHotState
+{
+    BootstrapPhase bootstrapPhase = BootstrapPhase::WAITING_FOR_DETAILS;  //!< Current high-level controller sync phase.
+    bool bootstrapRequestDue = true;                                      //!< True when the next bootstrap request may be sent immediately.
+    bool hasPendingTopologySave = false;        //!< True while a changed topology still has to be persisted to NVS.
+    bool isAuthoritativeStateDirty = false;     //!< True after fresh controller state arrived but is not yet mirrored to MQTT/Homie.
+    bool canServeCachedStateRequests = false;   //!< True only after this MQTT session has already seen one fresh controller-backed state.
+    bool isControllerConnected = false;         //!< Last known controller connectivity bit, used to detect link transitions.
+    std::uint32_t lastBootstrapRequestMs = 0U;  //!< Real-time timestamp of the last `ASK_DETAILS` or `ASK_STATE`.
+    std::uint32_t lastTopologySaveAttemptMs = 0U;       //!< Real-time timestamp of the last deferred NVS save attempt.
+    std::uint32_t lastAuthoritativeStateUpdateMs = 0U;  //!< Real-time timestamp of the latest accepted authoritative state frame.
+};
 
-void scheduleBootstrapRequestNow(bool &bootstrapRequestDue, std::uint32_t &lastBootstrapRequestMs);
+/**
+ * @brief Forget transient runtime state that must be rebuilt from fresh controller-backed data.
+ */
+void clearPendingRuntimeState(ControllerSerialLink &controllerSerialLink, RuntimeHotState &runtimeState);
 
-void enterWaitingForDetails(ControllerSerialLink &controllerSerialLink,
-                            VirtualDevice &virtualDevice,
-                            bool &isAuthoritativeStateDirty,
-                            bool &canServeCachedStateRequests,
-                            BootstrapPhase &bootstrapPhase,
-                            bool &bootstrapRequestDue,
-                            std::uint32_t &lastBootstrapRequestMs);
+/**
+ * @brief Schedule the next bootstrap request for the earliest safe loop iteration.
+ */
+void scheduleBootstrapRequestNow(RuntimeHotState &runtimeState);
 
-void enterWaitingForState(ControllerSerialLink &controllerSerialLink,
-                          VirtualDevice &virtualDevice,
-                          bool &isAuthoritativeStateDirty,
-                          bool &canServeCachedStateRequests,
-                          BootstrapPhase &bootstrapPhase,
-                          bool &bootstrapRequestDue,
-                          std::uint32_t &lastBootstrapRequestMs);
+/**
+ * @brief Enter the phase that waits for authoritative `DEVICE_DETAILS`.
+ */
+void enterWaitingForDetails(ControllerSerialLink &controllerSerialLink, VirtualDevice &virtualDevice, RuntimeHotState &runtimeState);
 
+/**
+ * @brief Enter the phase that waits for one fresh authoritative `STATE` frame.
+ */
+void enterWaitingForState(ControllerSerialLink &controllerSerialLink, VirtualDevice &virtualDevice, RuntimeHotState &runtimeState);
+
+/**
+ * @brief Stage one validated topology update that must be persisted before reboot.
+ */
 void stageTopologyMigration(ControllerSerialLink &controllerSerialLink,
                             VirtualDevice &virtualDevice,
+                            RuntimeHotState &runtimeState,
                             DeviceDetailsSnapshot &pendingTopologyDetails,
-                            bool &hasPendingTopologySave,
-                            bool &isAuthoritativeStateDirty,
-                            bool &canServeCachedStateRequests,
-                            const DeviceDetailsSnapshot &details,
-                            std::uint32_t &lastTopologySaveAttemptMs,
-                            BootstrapPhase &bootstrapPhase);
+                            const DeviceDetailsSnapshot &details);
 
+/**
+ * @brief Mark the runtime model stale and request one authoritative state refresh.
+ */
 void requestAuthoritativeStateRefresh(ControllerSerialLink &controllerSerialLink,
                                       VirtualDevice &virtualDevice,
-                                      bool &isAuthoritativeStateDirty,
-                                      bool &canServeCachedStateRequests,
-                                      BootstrapPhase &bootstrapPhase,
-                                      bool &bootstrapRequestDue,
-                                      std::uint32_t &lastBootstrapRequestMs);
+                                      RuntimeHotState &runtimeState);
 
+/**
+ * @brief React to one controller-link connectivity transition.
+ */
 void refreshControllerConnectivity(bool isConnectedNow,
-                                   bool &isControllerConnected,
                                    ControllerSerialLink &controllerSerialLink,
                                    VirtualDevice &virtualDevice,
-                                   bool &isAuthoritativeStateDirty,
-                                   bool &canServeCachedStateRequests,
-                                   BootstrapPhase &bootstrapPhase,
-                                   bool &bootstrapRequestDue,
-                                   std::uint32_t &lastBootstrapRequestMs);
+                                   RuntimeHotState &runtimeState);
 
 [[nodiscard]] auto bootstrapPhaseName(BootstrapPhase bootstrapPhase) -> const char *;
 

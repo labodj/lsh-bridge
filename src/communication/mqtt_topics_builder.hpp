@@ -31,7 +31,6 @@ namespace MqttTopicsBuilder
 {
 extern etl::string<constants::mqtt::MQTT_BASE_TOPIC_LENGTH> mqttBaseTopic;
 extern etl::string<constants::mqtt::MQTT_MAX_IN_TOPIC_LENGTH> mqttInTopic;
-extern std::uint32_t mqttInTopicHash;
 extern etl::string<constants::mqtt::MQTT_MAX_OUT_CONF_TOPIC_LENGTH> mqttOutConfTopic;
 extern etl::string<constants::mqtt::MQTT_MAX_OUT_STATE_TOPIC_LENGTH> mqttOutStateTopic;
 extern etl::string<constants::mqtt::MQTT_MAX_OUT_EVENTS_TOPIC_LENGTH> mqttOutEventsTopic;

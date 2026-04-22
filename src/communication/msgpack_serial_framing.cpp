@@ -286,10 +286,37 @@ auto MsgPackFrameWriter::write(const std::uint8_t *buffer, std::size_t size) -> 
     std::size_t writtenPayloadBytes = 0U;
     while (writtenPayloadBytes < size)
     {
+        std::size_t contiguousSafeBytes = 0U;
+        while ((writtenPayloadBytes + contiguousSafeBytes) < size)
+        {
+            const std::uint8_t byte = buffer[writtenPayloadBytes + contiguousSafeBytes];
+            if (byte == MSGPACK_FRAME_END || byte == MSGPACK_FRAME_ESCAPE)
+            {
+                break;
+            }
+            ++contiguousSafeBytes;
+        }
+
+        if (contiguousSafeBytes > 0U)
+        {
+            const std::size_t writtenChunkBytes = this->serial.write(buffer + writtenPayloadBytes, contiguousSafeBytes);
+            writtenPayloadBytes += writtenChunkBytes;
+            if (writtenChunkBytes != contiguousSafeBytes)
+            {
+                break;
+            }
+
+            if (writtenPayloadBytes == size)
+            {
+                break;
+            }
+        }
+
         if (!this->writeEscapedByte(buffer[writtenPayloadBytes]))
         {
             break;
         }
+
         ++writtenPayloadBytes;
     }
 

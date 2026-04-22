@@ -68,6 +68,19 @@ void VirtualDevice::setDetails(const DeviceDetailsSnapshot &details)
     this->invalidateRuntimeModel();
     copyStoredIds(details.actuatorIds, this->actuatorIds);
     copyStoredIds(details.buttonIds, this->buttonIds);
+
+    // Cache whether logical actuator IDs already match the dense runtime order.
+    // When true, later ID→index resolution becomes a trivial `id - 1` fast path.
+    this->actuatorIdsAreDenseOrdered = true;
+    for (std::size_t index = 0U; index < details.actuatorIds.size(); ++index)
+    {
+        const auto expectedId = static_cast<std::uint8_t>(index + 1U);
+        if (details.actuatorIds[index] != expectedId)
+        {
+            this->actuatorIdsAreDenseOrdered = false;
+            break;
+        }
+    }
 }
 
 /**
@@ -245,6 +258,15 @@ auto VirtualDevice::getActuatorId(std::uint8_t index) const -> std::uint8_t
  */
 auto VirtualDevice::tryGetActuatorIndex(std::uint8_t actuatorId, std::uint8_t &outIndex) const noexcept -> bool
 {
+    // Common reference-stack topology: logical actuator IDs are exactly 1..N in
+    // the same order as the dense runtime arrays. Cache that fact once in
+    // `setDetails()` so the hot lookup path stays O(1).
+    if (this->actuatorIdsAreDenseOrdered && actuatorId != 0U && actuatorId <= this->totalActuators)
+    {
+        outIndex = static_cast<std::uint8_t>(actuatorId - 1U);
+        return true;
+    }
+
     for (std::uint8_t index = 0U; index < this->totalActuators; ++index)
     {
         if (this->actuatorIds[index] == actuatorId)
@@ -287,6 +309,28 @@ auto VirtualDevice::getStateByIndex(std::uint8_t index) const noexcept -> bool
         return false;
     }
     return this->actuatorsState[index];
+}
+
+/**
+ * @brief Export one packed authoritative-state byte in wire order.
+ *
+ * @param byteIndex packed byte index inside the canonical `ACTUATORS_STATE` payload.
+ * @return std::uint8_t packed byte, or zero when the index is out of range.
+ */
+auto VirtualDevice::getPackedStateByte(std::uint8_t byteIndex) const noexcept -> std::uint8_t
+{
+    const std::uint8_t byteCount = this->getPackedStateByteCount();
+    if (byteIndex >= byteCount)
+    {
+        return 0U;
+    }
+
+    const std::size_t bitOffset = static_cast<std::size_t>(byteIndex) * 8U;
+    const std::size_t remainingBits = static_cast<std::size_t>(this->totalActuators) - bitOffset;
+    const std::size_t extractedBits = remainingBits < 8U ? remainingBits : 8U;
+    // The authoritative state already lives as one dense bitset, so exporting
+    // MQTT/controller wire bytes is just a bounded bit extraction.
+    return this->actuatorsState.extract<std::uint8_t>(bitOffset, extractedBits);
 }
 
 /**

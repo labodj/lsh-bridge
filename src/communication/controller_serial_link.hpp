@@ -60,12 +60,38 @@ public:
         std::uint16_t mutationCount = 0U;      //!< How many accepted command changes were merged into that unstable batch.
     };
 
+    /**
+     * @brief Compact desired-state shadow for the next outbound `SET_STATE` batch.
+     * @details Bit positions follow the same dense runtime order used by the
+     *          controller protocol and by `VirtualDevice::actuatorsState`.
+     */
+    using DesiredActuatorStateBitset = etl::bitset<constants::virtualDevice::MAX_ACTUATORS>;
+
 private:
-    std::uint32_t lastSentPayloadTime_ms = 0U;      //!< Last time a payload has been sent to the controller.
-    std::uint32_t lastReceivedPayloadTime_ms = 0U;  //!< Last time a valid payload has been received from the controller.
-    bool hasSeenControllerTraffic = false;          //!< True after the bridge has decoded at least one valid controller frame in this boot.
     HardwareSerial *const serial;                   //!< The serial port used to communicate with the controller.
     VirtualDevice &virtualDevice;                   //!< Device-details holder that stores received details and state.
+    std::uint32_t lastSentPayloadTime_ms = 0U;      //!< Last time a payload has been sent to the controller.
+    std::uint32_t lastReceivedPayloadTime_ms = 0U;  //!< Last time a valid payload has been received from the controller.
+    std::uint32_t firstDesiredActuatorUpdate_ms =
+        0U;  //!< Time of the first accepted change in the current batch. Used to detect command storms that keep the quiet window open forever.
+    std::uint32_t lastDesiredActuatorUpdate_ms = 0U;  //!< Last time the desired-state shadow changed.
+    // This block stores "what the bridge would like the controller state to become".
+    // It is intentionally separate from VirtualDevice, which stores only the last
+    // controller-confirmed authoritative state.
+    DesiredActuatorStateBitset desiredActuatorStates{};  //!< Desired-state shadow used only to build the next outbound `SET_STATE` batch.
+    etl::bitset<constants::virtualDevice::MAX_ACTUATORS>
+        desiredDirtyActuators{};  //!< Outbound per-actuator mask for remote intent not yet confirmed by an authoritative controller state frame.
+    std::uint16_t pendingActuatorMutationCount = 0U;   //!< Number of accepted non-duplicate changes merged into the current batch.
+    SemaphoreHandle_t actuatorCommandMutex = nullptr;  //!< Blocking mutex that protects the desired-state shadow across short serial sends.
+    bool hasSeenControllerTraffic = false;     //!< True after the bridge has decoded at least one valid controller frame in this boot.
+    bool actuatorCommandBatchPending = false;  //!< True while a coalesced outbound `SET_STATE` is still waiting for its quiet window.
+    bool hasPendingActuatorStormDiagnostic =
+        false;                        //!< True while a dropped unstable batch is waiting to be reported to the outer bridge runtime.
+    MessageCallback messageCallback;  //!< Registered callback invoked for each decoded payload.
+    ActuatorStormDiagnostic
+        pendingActuatorStormDiagnostic{};  //!< Details about the last unstable batch dropped by the bridge safety valve.
+
+    // Cold transport scratch space below this point.
     StaticJsonDocument<constants::controllerSerial::JSON_RECEIVED_MAX_SIZE> receivedDoc;  //!< Last received JSON document.
     StaticJsonDocument<constants::controllerSerial::MQTT_RECEIVED_DOC_MAX_SIZE>
         serializationDoc;  //!< Reusable doc for bridge-generated commands and coalesced `SET_STATE` batches.
@@ -79,25 +105,7 @@ private:
     std::uint16_t rxBufferIndex = 0U;                          //!< Current write index inside `rxBuffer`.
     bool discardInputUntilNewline = false;  //!< True while draining an oversized JSON frame until its terminating newline.
 #endif
-    // This block stores "what the bridge would like the controller state to become".
-    // It is intentionally separate from VirtualDevice, which stores only the last
-    // controller-confirmed authoritative state.
-    bool desiredActuatorStates
-        [constants::virtualDevice::MAX_ACTUATORS]{};  //!< Desired-state shadow used only to build the next outbound `SET_STATE` batch.
-    etl::bitset<constants::virtualDevice::MAX_ACTUATORS>
-        desiredDirtyActuators{};  //!< Outbound per-actuator mask for remote intent not yet confirmed by an authoritative controller state frame.
-    bool actuatorCommandBatchPending = false;  //!< True while a coalesced outbound `SET_STATE` is still waiting for its quiet window.
-    std::uint32_t firstDesiredActuatorUpdate_ms =
-        0U;  //!< Time of the first accepted change in the current batch. Used to detect command storms that keep the quiet window open forever.
-    std::uint32_t lastDesiredActuatorUpdate_ms = 0U;  //!< Last time the desired-state shadow changed.
-    std::uint16_t pendingActuatorMutationCount = 0U;  //!< Number of accepted non-duplicate changes merged into the current batch.
-    bool hasPendingActuatorStormDiagnostic =
-        false;  //!< True while a dropped unstable batch is waiting to be reported to the outer bridge runtime.
-    ActuatorStormDiagnostic
-        pendingActuatorStormDiagnostic{};              //!< Details about the last unstable batch dropped by the bridge safety valve.
-    StaticSemaphore_t actuatorCommandMutexStorage{};   //!< Storage owned by the bridge-side desired-state mutex.
-    SemaphoreHandle_t actuatorCommandMutex = nullptr;  //!< Blocking mutex that protects the desired-state shadow across short serial sends.
-    MessageCallback messageCallback;                   //!< Registered callback invoked for each decoded payload.
+    StaticSemaphore_t actuatorCommandMutexStorage{};  //!< Storage owned by the bridge-side desired-state mutex.
 
     /** @brief Lock the desired-state shadow while the bridge updates or serializes it. */
     void lockActuatorCommandState()

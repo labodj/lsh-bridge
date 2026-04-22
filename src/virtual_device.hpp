@@ -62,23 +62,24 @@ using ActuatorStateBitset = etl::bitset<constants::virtualDevice::MAX_ACTUATORS>
 class VirtualDevice
 {
 private:
-    // Device identity
-    etl::string<constants::virtualDevice::MAX_NAME_LENGTH> name{};  //!< Device name, populated from the serial device.
-    bool detailsCached = false;                                     //!< True after a validated details payload has been cached.
+    // Hot runtime state kept at the front: these fields are touched repeatedly by
+    // publish loops, batch coalescing and cache-backed state serving.
+    std::uint8_t totalActuators = 0U;         //!< Total number of actuators.
+    ActuatorStateBitset actuatorsState{};     //!< Real-time state of all actuators.
+    ActuatorStateBitset dirtyActuators{};     //!< Union of actuator changes not yet mirrored to Homie since the last publish window.
+    bool detailsCached = false;               //!< True after a validated details payload has been cached.
+    bool runtimeSynchronized = false;         //!< False until a fresh authoritative state arrives from the controller.
+    bool fullStatePublishPending = true;      //!< Forces a full Homie snapshot after the next authoritative state sync.
+    bool actuatorIdsAreDenseOrdered = false;  //!< True when logical actuator IDs are exactly 1..N in runtime order.
 
-    // Actuators
-    std::uint8_t totalActuators = 0U;  //!< Total number of actuators.
+    // Cold topology/caching data.
+    etl::string<constants::virtualDevice::MAX_NAME_LENGTH> name{};  //!< Device name, populated from the serial device.
 
     // Stores the original actuator UUIDs. This is necessary for initializing Homie nodes,
     // building MQTT/Homie topology and mapping state indexes back to logical IDs.
     etl::vector<std::uint8_t, constants::virtualDevice::MAX_ACTUATORS> actuatorIds{};
     etl::vector<std::uint8_t, constants::virtualDevice::MAX_BUTTONS>
         buttonIds{};  //!< Stores original button IDs for cache-backed `DEVICE_DETAILS` replies.
-
-    ActuatorStateBitset actuatorsState{};  //!< Real-time state of all actuators.
-    ActuatorStateBitset dirtyActuators{};  //!< Union of actuator changes not yet mirrored to Homie since the last publish window.
-    bool runtimeSynchronized = false;      //!< False until a fresh authoritative state arrives from the controller.
-    bool fullStatePublishPending = true;   //!< Forces a full Homie snapshot after the next authoritative state sync.
 
 public:
     VirtualDevice() noexcept {};
@@ -118,7 +119,43 @@ public:
 
     auto getStateByIndex(std::uint8_t index) const noexcept -> bool;
 
+    [[nodiscard]] inline auto getStateByIndexUnchecked(std::uint8_t index) const noexcept -> bool
+    {
+        return this->actuatorsState[index];
+    }
+
+    /**
+     * @brief Expose the canonical authoritative state bitset.
+     * @details Used by hot bridge-side paths that compare or repack state
+     *          without paying repeated per-actuator accessor overhead.
+     */
+    [[nodiscard]] inline auto getStateBits() const noexcept -> const ActuatorStateBitset &
+    {
+        return this->actuatorsState;
+    }
+
+    /**
+     * @brief Return the number of packed state bytes required by the active topology.
+     */
+    [[nodiscard]] inline auto getPackedStateByteCount() const noexcept -> std::uint8_t
+    {
+        return static_cast<std::uint8_t>((static_cast<std::size_t>(this->totalActuators) + 7U) / 8U);
+    }
+
+    /**
+     * @brief Return one authoritative packed state byte in protocol wire order.
+     *
+     * @param byteIndex packed byte index inside the compact `ACTUATORS_STATE` payload.
+     * @return std::uint8_t packed state byte, or zero when `byteIndex` is out of range.
+     */
+    [[nodiscard]] auto getPackedStateByte(std::uint8_t byteIndex) const noexcept -> std::uint8_t;
+
     auto isActuatorDirty(std::uint8_t index) const noexcept -> bool;
+
+    [[nodiscard]] inline auto isActuatorDirtyUnchecked(std::uint8_t index) const noexcept -> bool
+    {
+        return this->dirtyActuators.test(index);
+    }
 
     void clearDirtyActuators() noexcept;
 
