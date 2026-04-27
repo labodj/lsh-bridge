@@ -62,8 +62,73 @@ jobs:
       - name: Build public example
         run: platformio run -d examples/basic-homie-bridge -e "${{ matrix.env }}"
 
+  package-registry-smoke:
+    needs: validate-generated-protocol
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: "recursive"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-platformio-package-smoke-${{ hashFiles('library.json', 'examples/basic-homie-bridge/platformio.ini') }}
+          restore-keys: ${{ runner.os }}-platformio-package-smoke-
+
+      - name: Install PlatformIO
+        run: python3 -m pip install --upgrade pip "platformio==6.1.19"
+
+      - name: Pack library and build a registry-style consumer
+        run: |
+          set -eu
+          package_path=$(mktemp --suffix=.tar.gz)
+          smoke_dir=$(mktemp -d)
+          trap 'rm -f "$package_path"; rm -rf "$smoke_dir"' EXIT
+
+          platformio pkg pack --output "$package_path"
+          tar -tzf "$package_path" | grep -F "docs/runtime-behavior.md"
+          tar -tzf "$package_path" | grep -F "examples/basic-homie-bridge/platformio.ini"
+          tar -tzf "$package_path" | grep -F "src/lsh_bridge.hpp"
+          ! tar -tzf "$package_path" | grep -E '(^|/)(\.pio|\.github|\.gitnexus|vendor|tools|AGENTS\.md|CLAUDE\.md)(/|$)'
+
+          mkdir -p "$smoke_dir/include" "$smoke_dir/src"
+          cp examples/basic-homie-bridge/include/lsh_etl_profile_override.h "$smoke_dir/include/"
+          cp examples/basic-homie-bridge/src/main.cpp "$smoke_dir/src/"
+          # Keep the checked-in example on the local symlink workflow; rewrite
+          # only this temporary copy to prove the packed registry artifact works.
+          python3 - "$package_path" "$smoke_dir" <<'PY'
+          import pathlib
+          import sys
+
+          package_path = sys.argv[1]
+          smoke_dir = pathlib.Path(sys.argv[2])
+          source = pathlib.Path("examples/basic-homie-bridge/platformio.ini")
+          target = smoke_dir / "platformio.ini"
+          contents = source.read_text(encoding="utf-8")
+          local_dependency = "lsh-bridge=symlink://../.."
+          if local_dependency not in contents:
+              raise SystemExit(f"Expected local dependency {local_dependency!r} was not found")
+          contents = contents.replace(local_dependency, f"file://{package_path}")
+          target.write_text(contents, encoding="utf-8")
+          PY
+
+          platformio run -d "$smoke_dir" -e release
+
   release:
-    needs: [validate-generated-protocol, build-public-example]
+    needs: [validate-generated-protocol, build-public-example, package-registry-smoke]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -87,3 +152,39 @@ jobs:
         with:
           name: lsh-bridge ${{ github.ref_name }}
           generate_release_notes: true
+
+  publish-platformio-registry:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: "recursive"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install PlatformIO
+        run: python3 -m pip install --upgrade pip "platformio==6.1.19"
+
+      - name: Publish library to PlatformIO Registry
+        env:
+          PLATFORMIO_AUTH_TOKEN: ${{ secrets.PLATFORMIO_AUTH_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${PLATFORMIO_AUTH_TOKEN:-}" ]; then
+            echo "PLATFORMIO_AUTH_TOKEN GitHub secret is not configured."
+            exit 1
+          fi
+
+          package_path=$(mktemp --suffix=.tar.gz)
+          trap 'rm -f "$package_path"' EXIT
+
+          platformio pkg pack --output "$package_path"
+          platformio pkg publish "$package_path" --owner labodj --type library --no-interactive
