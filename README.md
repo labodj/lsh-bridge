@@ -1,6 +1,9 @@
-[![Build Status](https://github.com/labodj/lsh-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/labodj/lsh-bridge/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/labodj/lsh-bridge?display_name=tag&sort=semver)](https://github.com/labodj/lsh-bridge/releases/latest)
 # lsh-bridge
+
+[![PlatformIO Registry](https://badges.registry.platformio.org/packages/labodj/library/lsh-bridge.svg)](https://registry.platformio.org/libraries/labodj/lsh-bridge)
+[![CI](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Flabodj%2Flsh-bridge%2Factions%2Fworkflows%2Fci.yml%2Fruns%3Fper_page%3D1&query=%24.workflow_runs%5B0%5D.conclusion&label=CI)](https://github.com/labodj/lsh-bridge/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/release/labodj/lsh-bridge.svg)](https://github.com/labodj/lsh-bridge/releases/latest)
+[![License](https://img.shields.io/github/license/labodj/lsh-bridge.svg)](https://github.com/labodj/lsh-bridge/blob/main/LICENSE)
 
 `lsh-bridge` is the reusable library form of the LSH ESP bridge runtime.
 
@@ -24,8 +27,8 @@ Use this README according to your goal:
 - If you want the shortest end-to-end bring-up path, read the landing [`GETTING_STARTED.md`](https://github.com/labodj/labo-smart-home/blob/main/GETTING_STARTED.md) before changing bridge settings.
 - If your first lab is alive on MQTT but confusing in behavior, use the landing [`TROUBLESHOOTING.md`](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md).
 - If you want the bridge runtime model, start with [What the library does](#what-the-library-does).
-- If you want the exact runtime behaviors, read [docs/runtime-behavior.md](./docs/runtime-behavior.md).
-- If you want the compile-time tuning surface, read [docs/compile-time-configuration.md](./docs/compile-time-configuration.md).
+- If you want the exact runtime behaviors, read [docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
+- If you want the compile-time tuning surface, read [docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md).
 - If you want to embed the library quickly, jump to [Public API](#public-api) and the bundled example.
 
 The goal of this repo is narrow and pragmatic:
@@ -112,13 +115,13 @@ void loop() {
 }
 ```
 
-See [examples/basic-homie-bridge/src/main.cpp](./examples/basic-homie-bridge/src/main.cpp).
+See [examples/basic-homie-bridge/src/main.cpp](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/src/main.cpp).
 
 ## Bundled Example
 
 The fastest concrete starting point in this repository is:
 
-- [examples/basic-homie-bridge](./examples/basic-homie-bridge)
+- [examples/basic-homie-bridge](https://github.com/labodj/lsh-bridge/tree/main/examples/basic-homie-bridge)
 
 That example already carries the public topic profile, the default service topic
 and a conservative release environment for first bring-up.
@@ -128,9 +131,9 @@ and a conservative release environment for first bring-up.
 - the library currently assumes a single active bridge instance
 - Homie remains part of the opinionated runtime surface for now
 - runtime command handling and bridge-local diagnostics are documented in
-  [docs/runtime-behavior.md](./docs/runtime-behavior.md)
+  [docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md)
 - compile-time `CONFIG_*` knobs are supported and documented in
-  [docs/compile-time-configuration.md](./docs/compile-time-configuration.md)
+  [docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md)
 - the protocol source of truth remains vendored as `vendor/lsh-protocol`
 - Homie is built only in v5 mode: the embedding PlatformIO environment must set
   `HOMIE_CONVENTION_VERSION=5`, which publishes discovery as a retained
@@ -160,14 +163,14 @@ The embedding project should own:
 wiring, MQTT topic naming, liveness timers and codec selection.
 
 The full reference lives in
-[docs/compile-time-configuration.md](./docs/compile-time-configuration.md).
+[docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md).
 Runtime-only behaviors such as actuator command coalescing, unstable command
 storm protection, inbound MQTT queue backpressure and bridge-local MQTT
 diagnostics such as `mqtt_queue_overflow`, `mqtt_command_rejected` and
 `homie_command_rejected` are documented separately in
-[docs/runtime-behavior.md](./docs/runtime-behavior.md).
+[docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
 The bundled
-[example `platformio.ini`](./examples/basic-homie-bridge/platformio.ini)
+[example `platformio.ini`](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/platformio.ini)
 explicitly sets the supported value macros and leaves optional behavior flags
 commented.
 
@@ -185,11 +188,11 @@ Current supported knobs:
 
 The bundled example also includes a ready-to-use project-local ETL override
 header at
-[examples/basic-homie-bridge/include/lsh_etl_profile_override.h](./examples/basic-homie-bridge/include/lsh_etl_profile_override.h).
+[examples/basic-homie-bridge/include/lsh_etl_profile_override.h](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/include/lsh_etl_profile_override.h).
 
 ## Development
 
-The bundled example project lives in [examples/basic-homie-bridge](./examples/basic-homie-bridge).
+The bundled example project lives in [examples/basic-homie-bridge](https://github.com/labodj/lsh-bridge/tree/main/examples/basic-homie-bridge).
 
 The example exposes these CI-backed build profiles:
 

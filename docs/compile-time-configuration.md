@@ -76,7 +76,7 @@ The bridge derives topic buffer sizes automatically from the compiled strings ab
 | --- | --- | --- |
 | `HOMIE_CONVENTION_VERSION` | required `5` | Selects the Homie MQTT convention compiled by the `labodj/homie-v5` PlatformIO package. `lsh-bridge` now requires v5 so discovery is published under `homie/5/<device>/$description`. |
 | `CONFIG_HOMIE_FIRMWARE_NAME` | `"lsh-homie"` | Firmware name exposed through Homie. |
-| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.3.1"` | Firmware version exposed through Homie. |
+| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.3.2"` | Firmware version exposed through Homie. |
 | `CONFIG_HOMIE_BRAND` | `"LaboSmartHome"` | Homie brand string exposed by the bridge. |
 
 `HOMIE_CONVENTION_VERSION=5` must be passed by the embedding PlatformIO
@@ -241,7 +241,7 @@ build_flags =
     -D CONFIG_MQTT_TOPIC_SERVICE=\"LSH/Node-RED/SRV\"
     -D HOMIE_CONVENTION_VERSION=5
     -D CONFIG_HOMIE_FIRMWARE_NAME=\"lsh-homie\"
-    -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.3.1\"
+    -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.3.2\"
     -D CONFIG_HOMIE_BRAND=\"LaboSmartHome\"
     -D CONFIG_PING_INTERVAL_CONTROLLINO_MS=10000U
     -D CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS=10200U
