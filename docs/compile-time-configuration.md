@@ -70,16 +70,23 @@ These are derived automatically from the controller topology limits above and ar
 
 The bridge derives topic buffer sizes automatically from the compiled strings above plus `CONFIG_MAX_NAME_LENGTH`. There are no public `CONFIG_MQTT_*_LENGTH` knobs in the current library.
 
-## Homie identity
+## Homie convention and identity
 
 | Macro | Default | What it affects |
 | --- | --- | --- |
+| `HOMIE_CONVENTION_VERSION` | required `5` | Selects the Homie MQTT convention compiled by the `labodj/homie-v5` PlatformIO package. `lsh-bridge` now requires v5 so discovery is published under `homie/5/<device>/$description`. |
 | `CONFIG_HOMIE_FIRMWARE_NAME` | `"lsh-homie"` | Firmware name exposed through Homie. |
 | `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.2.3"` | Firmware version exposed through Homie. |
 | `CONFIG_HOMIE_BRAND` | `"LaboSmartHome"` | Homie brand string exposed by the bridge. |
 
-These macros must expand to string literals. `homie-esp8266` builds its
-internal flagged string format through macro concatenation, so firmware
+`HOMIE_CONVENTION_VERSION=5` must be passed by the embedding PlatformIO
+environment, not hidden inside one bridge source file, because the
+`labodj/homie-v5` dependency compiles its own translation units and must see
+the same convention selector. The bridge has a compile-time guard that rejects
+missing or legacy values instead of silently publishing Homie v3/v4 discovery.
+
+The identity macros must expand to string literals. The Homie dependency builds
+its internal flagged string format through macro concatenation, so firmware
 identity is intentionally compile-time only in the current bridge API.
 
 ## Liveness timers
@@ -103,6 +110,12 @@ identity is intentionally compile-time only in the current bridge API.
 | `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS` | `1000U` | Hard limit for how long an unstable pending actuator batch may stay open before the bridge drops it. |
 | `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT` | `32U` | Maximum number of accepted state changes merged into one pending actuator batch before the bridge treats the producer as unstable. |
 
+## Implementation storage
+
+| Macro | Default | What it affects |
+| --- | --- | --- |
+| `CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE` | `3072U` | Static byte storage reserved inside the public `LSHBridge` facade for the hidden runtime implementation. This avoids heap allocation while keeping the public header small. Normally leave it unset; if an unusual capacity profile makes the hidden implementation larger than the default, compilation fails with a clear `static_assert` and the embedding project can raise this value. |
+
 Internally the MQTT side also keeps two different size classes:
 
 - `MQTT_COMMAND_MESSAGE_MAX_SIZE`: queue slot size for inbound MQTT commands only
@@ -119,6 +132,10 @@ currently expose public `CONFIG_*` knobs.
 Important notes:
 
 - only topology is persisted: device name, actuator IDs and button IDs
+- the stored record is an explicit byte format with magic/version/checksum, not
+  a raw C++ struct dump, so it is not coupled to compiler padding or field
+  layout
+- older or invalid cache records are ignored and rebuilt from the controller
 - runtime actuator `STATE` is never written to flash
 - the cache is written only after a real topology change has been confirmed by
   the controller
@@ -222,6 +239,7 @@ build_flags =
     -D CONFIG_MQTT_TOPIC_EVENTS=\"events\"
     -D CONFIG_MQTT_TOPIC_BRIDGE=\"bridge\"
     -D CONFIG_MQTT_TOPIC_SERVICE=\"LSH/Node-RED/SRV\"
+    -D HOMIE_CONVENTION_VERSION=5
     -D CONFIG_HOMIE_FIRMWARE_NAME=\"lsh-homie\"
     -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.2.3\"
     -D CONFIG_HOMIE_BRAND=\"LaboSmartHome\"
@@ -234,9 +252,11 @@ build_flags =
     ; default: CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS
     ; -D CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS=40U
     ; -D CONFIG_MQTT_COMMAND_QUEUE_CAPACITY=8U
+    ; -D CONFIG_MQTT_MAX_COMMANDS_PER_LOOP=8U
     ; -D CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS=50U
     ; -D CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS=1000U
     ; -D CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT=32U
+    ; -D CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE=3072U
     -D CONFIG_MSG_PACK_ARDUINO
     ; default: undefined
     ; -D CONFIG_MSG_PACK_MQTT

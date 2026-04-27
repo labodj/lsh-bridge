@@ -105,6 +105,9 @@ uses that cached topology immediately to rebuild MQTT topics and Homie nodes.
 Current behavior:
 
 - only controller `DEVICE_DETAILS` are cached in NVS
+- the NVS record uses an explicit byte format with magic, version and checksum;
+  invalid or older records are ignored and rebuilt from the controller instead
+  of being interpreted as a partially valid topology
 - actuator runtime `STATE` is never persisted; the controller remains the only
   authoritative source of state
 - after startup the bridge enters `waiting_details` and slowly retries
@@ -138,6 +141,36 @@ If the controller later reports a different topology:
 
 This keeps the controller authoritative while keeping bootstrap work in the
 main loop.
+
+## Homie v5 discovery
+
+`lsh-bridge` requires `HOMIE_CONVENTION_VERSION=5` at build time. With the
+current `labodj/homie-v5` PlatformIO package, that moves discovery from the
+legacy retained attribute set to one retained JSON document at:
+
+```text
+homie/5/<device>/$description
+```
+
+Each cached controller actuator is still represented as one Homie node whose
+canonical property is `state`. The property is boolean, retained and settable,
+so controllers publish commands to:
+
+```text
+homie/5/<device>/<actuator-id>/state/set
+```
+
+and the bridge mirrors controller-backed state to:
+
+```text
+homie/5/<device>/<actuator-id>/state
+```
+
+The bridge does not build the `$description` JSON manually. It declares nodes
+and properties through the Homie dependency, which owns the v5 document shape
+and keeps firmware metadata such as `$fw/version` as optional retained
+extension topics. This keeps the bridge focused on controller synchronization
+while the Homie library owns convention-specific serialization.
 
 ## MQTT topic split: `events` vs `bridge`
 
@@ -190,6 +223,7 @@ Current diagnostic kinds:
 - `actuator_command_storm_dropped`
 - `mqtt_queue_overflow`
 - `mqtt_command_rejected`
+- `homie_command_rejected`
 - `topology_changed`
 
 Logical payload shape for `actuator_command_storm_dropped`:
@@ -263,6 +297,31 @@ Notes:
 - diagnostics belong to the current MQTT session only; pending bridge-local
   diagnostics are cleared when MQTT disconnects so stale warnings are not
   replayed after reconnect
+
+Logical payload shape for `homie_command_rejected`:
+
+```json
+{
+  "event": "diagnostic",
+  "kind": "homie_command_rejected",
+  "rejected_homie_desync_commands": 1,
+  "rejected_homie_invalid_payload_commands": 2,
+  "rejected_homie_stage_failed_commands": 3
+}
+```
+
+Meaning:
+
+- `rejected_homie_desync_commands`: number of Homie actuator writes consumed
+  while the bridge runtime was not synchronized with the controller
+- `rejected_homie_invalid_payload_commands`: number of Homie actuator writes
+  rejected because the value was not a valid boolean command
+- `rejected_homie_stage_failed_commands`: number of valid Homie actuator writes
+  that could not be staged into the pending actuator batch
+
+Homie property callbacks intentionally keep consuming these writes. The
+diagnostic exists so a caller can detect rejected commands without causing Homie
+to repeatedly redeliver a stale or unsafe write.
 
 Logical payload shape for a service-topic `PING` reply:
 

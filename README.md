@@ -132,6 +132,9 @@ and a conservative release environment for first bring-up.
 - compile-time `CONFIG_*` knobs are supported and documented in
   [docs/compile-time-configuration.md](./docs/compile-time-configuration.md)
 - the protocol source of truth remains vendored as `vendor/lsh-protocol`
+- Homie is built only in v5 mode: the embedding PlatformIO environment must set
+  `HOMIE_CONVENTION_VERSION=5`, which publishes discovery as a retained
+  `homie/5/<device>/$description` document
 - Homie firmware identity is configured at compile time through
   `CONFIG_HOMIE_FIRMWARE_NAME`, `CONFIG_HOMIE_FIRMWARE_VERSION` and
   `CONFIG_HOMIE_BRAND`
@@ -160,8 +163,8 @@ The full reference lives in
 [docs/compile-time-configuration.md](./docs/compile-time-configuration.md).
 Runtime-only behaviors such as actuator command coalescing, unstable command
 storm protection, inbound MQTT queue backpressure and bridge-local MQTT
-diagnostics such as `mqtt_queue_overflow` and `mqtt_command_rejected`
-(including malformed-command rejections) are documented separately in
+diagnostics such as `mqtt_queue_overflow`, `mqtt_command_rejected` and
+`homie_command_rejected` are documented separately in
 [docs/runtime-behavior.md](./docs/runtime-behavior.md).
 The bundled
 [example `platformio.ini`](./examples/basic-homie-bridge/platformio.ini)
@@ -173,9 +176,10 @@ Current supported knobs:
 - capacities: `CONFIG_MAX_ACTUATORS`, `CONFIG_MAX_BUTTONS`, `CONFIG_MAX_NAME_LENGTH`
 - serial: `CONFIG_ARDCOM_SERIAL_RX_PIN`, `CONFIG_ARDCOM_SERIAL_TX_PIN`, `CONFIG_ARDCOM_SERIAL_BAUD`, `CONFIG_ARDCOM_SERIAL_TIMEOUT_MS`, `CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS`, `CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP`
 - MQTT topics: `CONFIG_MQTT_TOPIC_BASE`, `CONFIG_MQTT_TOPIC_INPUT`, `CONFIG_MQTT_TOPIC_STATE`, `CONFIG_MQTT_TOPIC_CONF`, `CONFIG_MQTT_TOPIC_EVENTS`, `CONFIG_MQTT_TOPIC_BRIDGE`, `CONFIG_MQTT_TOPIC_SERVICE`
-- Homie identity: `CONFIG_HOMIE_FIRMWARE_NAME`, `CONFIG_HOMIE_FIRMWARE_VERSION`, `CONFIG_HOMIE_BRAND`
+- Homie convention and identity: `HOMIE_CONVENTION_VERSION=5`, `CONFIG_HOMIE_FIRMWARE_NAME`, `CONFIG_HOMIE_FIRMWARE_VERSION`, `CONFIG_HOMIE_BRAND`
 - liveness: `CONFIG_PING_INTERVAL_CONTROLLINO_MS`, `CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS`
-- runtime policy: `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS`, `CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS`, `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY`, `CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT`
+- runtime policy: `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS`, `CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS`, `CONFIG_TOPOLOGY_REBOOT_GRACE_MS`, `CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS`, `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY`, `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP`, `CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT`
+- implementation storage: `CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE`
 - codecs and flags: `CONFIG_MSG_PACK_ARDUINO`, `CONFIG_MSG_PACK_MQTT`, `LSH_DEBUG`, `HOMIE_RESET`
 - ETL override hook: `LSH_ETL_PROFILE_OVERRIDE_HEADER`
 
@@ -187,10 +191,13 @@ header at
 
 The bundled example project lives in [examples/basic-homie-bridge](./examples/basic-homie-bridge).
 
-The example exposes two build profiles:
+The example exposes these CI-backed build profiles:
 
 - `release`: conservative and simple, suitable as a library smoke test
 - `release_aggressive`: mirrors the original bridge firmware optimization style more closely
+- `release_json_serial`: JSON on the controller serial link, JSON on MQTT
+- `release_msgpack_mqtt`: MsgPack on the controller serial link and MQTT
+- `release_json_serial_msgpack_mqtt`: JSON on serial, MsgPack on MQTT
 
 To verify the vendored protocol stays aligned:
 
