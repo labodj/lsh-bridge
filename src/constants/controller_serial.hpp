@@ -223,18 +223,41 @@ constexpr std::uint16_t JSON_RECEIVED_MAX_SIZE =
 constexpr std::uint16_t MQTT_SET_STATE_DOC_SIZE =
     std::bit_ceil(JSON_ARRAY_SIZE((virtualDevice::MAX_ACTUATORS + 7U) / 8U) + JSON_OBJECT_SIZE(2) + 4U);
 /**
+ * @brief Memory pool size for an inbound MQTT `SET_SINGLE_ACTUATOR` command document.
+ * @details Covers payloads shaped like `{"p":13,"i":255,"s":1}`.
+ */
+constexpr std::uint16_t MQTT_SET_SINGLE_ACTUATOR_DOC_SIZE = std::bit_ceil(JSON_OBJECT_SIZE(3) + 4U);
+/**
  * @brief Memory pool size for inbound MQTT click command documents.
  * @details Covers payloads shaped like
  *          `{"p":17,"t":2,"i":255,"c":255}`.
  */
 constexpr std::uint16_t MQTT_CLICK_DOC_SIZE = std::bit_ceil(JSON_OBJECT_SIZE(4) + 4U);
 /**
+ * @brief Memory pool size for the first-pass MQTT command-id decode.
+ * @details Most bridge-local and controller-control commands only need the
+ *          `p` field. A tiny filtered document keeps those hot paths from
+ *          paying for the larger `SET_STATE`/click document pool.
+ */
+constexpr std::uint16_t MQTT_COMMAND_ID_DOC_SIZE = std::bit_ceil(JSON_OBJECT_SIZE(1) + 4U);
+/**
  * @brief Maximum memory pool size needed for any supported inbound MQTT command.
  * @details The bridge fully deserializes supported MQTT control payloads,
  *          so the static document must fit the largest known command type.
  */
-constexpr std::uint16_t MQTT_RECEIVED_DOC_MAX_SIZE =
-    MQTT_SET_STATE_DOC_SIZE < MQTT_CLICK_DOC_SIZE ? MQTT_CLICK_DOC_SIZE : MQTT_SET_STATE_DOC_SIZE;
+constexpr std::uint16_t MQTT_RECEIVED_DOC_MAX_SIZE = []() constexpr -> std::uint16_t
+{
+    std::uint16_t maxSize = MQTT_SET_STATE_DOC_SIZE;
+    if (maxSize < MQTT_SET_SINGLE_ACTUATOR_DOC_SIZE)
+    {
+        maxSize = MQTT_SET_SINGLE_ACTUATOR_DOC_SIZE;
+    }
+    if (maxSize < MQTT_CLICK_DOC_SIZE)
+    {
+        maxSize = MQTT_CLICK_DOC_SIZE;
+    }
+    return maxSize;
+}();
 static_assert(MQTT_RECEIVED_DOC_MAX_SIZE >= JSON_OBJECT_SIZE(4), "MQTT_RECEIVED_DOC_MAX_SIZE must fit click payloads.");
 
 }  // namespace controllerSerial

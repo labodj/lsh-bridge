@@ -24,14 +24,39 @@
 
 namespace lsh::bridge
 {
+namespace
+{
+/**
+ * @brief Advance one ring-buffer index without using `%`.
+ * @details Queue capacity is a runtime-configurable compile-time constant, not
+ *          necessarily a power of two. A compare-and-reset branch avoids the
+ *          division emitted by modulo on small embedded targets while keeping
+ *          support for every valid queue capacity.
+ */
+[[nodiscard]] auto nextQueueIndex(std::uint8_t index) noexcept -> std::uint8_t
+{
+    ++index;
+    if (index >= constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY)
+    {
+        return 0U;
+    }
+    return index;
+}
+
+/**
+ * @brief Compare two queue sequence numbers across uint16_t wraparound.
+ */
+[[nodiscard]] auto sequenceBefore(std::uint16_t lhs, std::uint16_t rhs) noexcept -> bool
+{
+    return static_cast<std::int16_t>(lhs - rhs) < 0;
+}
+}  // namespace
 
 /**
  * @brief Copy one complete MQTT frame into the fixed bridge-side queue.
  * @details The MQTT callback may run concurrently with disconnect teardown.
- *          The bridge therefore keeps enqueue fully linearizable: reserve the
- *          slot and copy the payload while the queue lock is held. This keeps
- *          teardown safe even if MQTT disconnects while a callback is still in
- *          flight.
+ *          The queue reserves a slot under the lock, copies payload bytes
+ *          outside the lock, then commits only if no clear() happened meanwhile.
  *
  * @param source Topic family that produced this command.
  * @param payload Raw MQTT payload bytes.
@@ -46,17 +71,59 @@ auto MqttCommandQueue::enqueue(MqttCommandSource source, const char *payload, st
         return false;
     }
 
-    bool wasQueued = false;
+    std::uint8_t reservedIndex = 0U;
+    std::uint16_t reservedGeneration = 0U;
+    bool wasReserved = false;
+
     portENTER_CRITICAL(&this->queueMux);
     if (this->count < constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY)
     {
-        auto &slot = this->queue[this->tail];
+        std::uint8_t candidateIndex = this->tail;
+        for (std::uint8_t visited = 0U; visited < constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY; ++visited)
+        {
+            auto &slot = this->queue[candidateIndex];
+            if (slot.state == MqttCommandSlotState::Free)
+            {
+                reservedIndex = candidateIndex;
+                reservedGeneration = this->queueGeneration;
+                slot.state = MqttCommandSlotState::Writing;
+                slot.generation = reservedGeneration;
+                slot.sequence = this->nextSequence;
+                slot.length = 0U;
+                ++this->nextSequence;
+                this->tail = nextQueueIndex(candidateIndex);
+                ++this->count;
+                wasReserved = true;
+                break;
+            }
+            candidateIndex = nextQueueIndex(candidateIndex);
+        }
+    }
+    portEXIT_CRITICAL(&this->queueMux);
+
+    if (!wasReserved)
+    {
+        return false;
+    }
+
+    auto &slot = this->queue[reservedIndex];
+    std::memcpy(slot.payload, payload, payloadLength);
+
+    bool wasQueued = false;
+    portENTER_CRITICAL(&this->queueMux);
+    if (slot.state == MqttCommandSlotState::Writing && slot.generation == reservedGeneration &&
+        reservedGeneration == this->queueGeneration)
+    {
         slot.source = source;
         slot.length = static_cast<std::uint16_t>(payloadLength);
-        std::memcpy(slot.payload, payload, payloadLength);
-        this->tail = static_cast<std::uint8_t>((this->tail + 1U) % constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY);
-        ++this->count;
+        slot.state = MqttCommandSlotState::Ready;
         wasQueued = true;
+    }
+    else if (slot.state == MqttCommandSlotState::Writing && slot.generation == reservedGeneration)
+    {
+        slot.length = 0U;
+        slot.state = MqttCommandSlotState::Free;
+        --this->count;
     }
     portEXIT_CRITICAL(&this->queueMux);
 
@@ -65,10 +132,10 @@ auto MqttCommandQueue::enqueue(MqttCommandSource source, const char *payload, st
 
 /**
  * @brief Pop the oldest queued MQTT frame from the fixed ring buffer.
- * @details Head, tail and count are protected by `queueMux` because the MQTT
- *          callback path and the main loop can touch the queue concurrently.
- *          Because enqueue commits the whole slot under the same lock, dequeue
- *          never needs a per-slot readiness bit.
+ * @details Slot metadata is protected by `queueMux` because the MQTT callback
+ *          path and the main loop can touch the queue concurrently. The payload
+ *          copy itself happens outside the lock after a short slot reservation,
+ *          then the slot is released only if clear() did not race.
  *
  * @param outCommand Destination for the oldest queued frame.
  * @return true if one queued frame has been copied into `outCommand`.
@@ -76,14 +143,64 @@ auto MqttCommandQueue::enqueue(MqttCommandSource source, const char *payload, st
  */
 auto MqttCommandQueue::dequeue(QueuedMqttCommand &outCommand) -> bool
 {
-    bool wasDequeued = false;
+    std::uint8_t reservedIndex = 0U;
+    std::uint16_t reservedGeneration = 0U;
+    std::uint16_t reservedLength = 0U;
+    MqttCommandSource reservedSource = MqttCommandSource::Device;
+    bool wasReserved = false;
+
     portENTER_CRITICAL(&this->queueMux);
     if (this->count > 0U)
     {
-        outCommand = this->queue[this->head];
-        this->head = static_cast<std::uint8_t>((this->head + 1U) % constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY);
+        bool hasOldestSlot = false;
+        std::uint8_t oldestIndex = 0U;
+        std::uint16_t oldestSequence = 0U;
+        for (std::uint8_t index = 0U; index < constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY; ++index)
+        {
+            const auto &slot = this->queue[index];
+            if (slot.state != MqttCommandSlotState::Free &&
+                (!hasOldestSlot || sequenceBefore(slot.sequence, oldestSequence)))
+            {
+                oldestIndex = index;
+                oldestSequence = slot.sequence;
+                hasOldestSlot = true;
+            }
+        }
+
+        if (hasOldestSlot)
+        {
+            auto &slot = this->queue[oldestIndex];
+            if (slot.state == MqttCommandSlotState::Ready)
+            {
+                reservedIndex = oldestIndex;
+                reservedGeneration = slot.generation;
+                reservedLength = slot.length;
+                reservedSource = slot.source;
+                slot.state = MqttCommandSlotState::Reading;
+                wasReserved = true;
+            }
+        }
+    }
+    portEXIT_CRITICAL(&this->queueMux);
+
+    if (!wasReserved)
+    {
+        return false;
+    }
+
+    outCommand.source = reservedSource;
+    outCommand.length = reservedLength;
+    std::memcpy(outCommand.payload, this->queue[reservedIndex].payload, reservedLength);
+
+    bool wasDequeued = false;
+    portENTER_CRITICAL(&this->queueMux);
+    auto &slot = this->queue[reservedIndex];
+    if (slot.state == MqttCommandSlotState::Reading && slot.generation == reservedGeneration)
+    {
+        wasDequeued = (reservedGeneration == this->queueGeneration);
+        slot.state = MqttCommandSlotState::Free;
+        slot.length = 0U;
         --this->count;
-        wasDequeued = true;
     }
     portEXIT_CRITICAL(&this->queueMux);
 
@@ -98,9 +215,26 @@ auto MqttCommandQueue::dequeue(QueuedMqttCommand &outCommand) -> bool
 void MqttCommandQueue::clear()
 {
     portENTER_CRITICAL(&this->queueMux);
-    this->head = 0U;
+    ++this->queueGeneration;
+    if (this->queueGeneration == 0U)
+    {
+        this->queueGeneration = 1U;
+    }
     this->tail = 0U;
     this->count = 0U;
+    for (auto &slot : this->queue)
+    {
+        if (slot.state == MqttCommandSlotState::Writing || slot.state == MqttCommandSlotState::Reading)
+        {
+            ++this->count;
+        }
+        else
+        {
+            slot.state = MqttCommandSlotState::Free;
+            slot.length = 0U;
+            slot.generation = this->queueGeneration;
+        }
+    }
     portEXIT_CRITICAL(&this->queueMux);
 }
 

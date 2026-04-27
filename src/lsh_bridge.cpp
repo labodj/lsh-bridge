@@ -21,18 +21,22 @@
 #include "lsh_bridge.hpp"
 
 #include <cstring>
+#include <cstddef>
 #include <cstdint>
+#include <new>
 #include <utility>
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <AsyncMqttClient.h>
+#include "constants/configs/homie_convention.hpp"
 #include <Homie.h>
 #include <etl/bitset.h>
 #include <etl/vector.h>
 
 #include "bridge_runtime_diagnostics.hpp"
 #include "bridge_runtime_sync.hpp"
+#include "communication/checked_writer.hpp"
 #include "communication/controller_serial_link.hpp"
 #include "communication/mqtt_topics_builder.hpp"
 #include "communication/mqtt_publisher.hpp"
@@ -46,6 +50,7 @@
 #include "debug/debug.hpp"
 #include "details_cache_store.hpp"
 #include "lsh_node.hpp"
+#include "mqtt_command_decoder.hpp"
 #include "mqtt_command_queue.hpp"
 #include "utils/json_scalars.hpp"
 #include "utils/time_keeper.hpp"
@@ -61,6 +66,110 @@ constexpr char kTopologyChangedDiagnostic[] =
 constexpr std::uint16_t kTopologyChangedDiagnosticGraceMs =
     150U;  //!< Short grace window that gives the MQTT client one chance to flush `topology_changed` before rebooting.
 
+void writePayloadByte(lsh::bridge::communication::FixedBufferWriter &writer, std::uint8_t byte)
+{
+    (void)writer.write(byte);
+}
+
+template <std::size_t Length> void writePayloadLiteral(lsh::bridge::communication::FixedBufferWriter &writer, const char (&literal)[Length])
+{
+    (void)writer.write(reinterpret_cast<const std::uint8_t *>(literal), Length - 1U);
+}
+
+#ifdef CONFIG_MSG_PACK_MQTT
+void writeMsgPackUint8(lsh::bridge::communication::FixedBufferWriter &writer, std::uint8_t value)
+{
+    if (value <= 0x7FU)
+    {
+        writePayloadByte(writer, value);
+        return;
+    }
+
+    writePayloadByte(writer, 0xCCU);
+    writePayloadByte(writer, value);
+}
+
+void writeMsgPackArrayHeader(lsh::bridge::communication::FixedBufferWriter &writer, std::uint8_t elementCount)
+{
+    if (elementCount <= 15U)
+    {
+        writePayloadByte(writer, static_cast<std::uint8_t>(0x90U | elementCount));
+        return;
+    }
+
+    writePayloadByte(writer, 0xDCU);
+    writePayloadByte(writer, 0U);
+    writePayloadByte(writer, elementCount);
+}
+#else
+void writeJsonUint8(lsh::bridge::communication::FixedBufferWriter &writer, std::uint8_t value)
+{
+    if (value >= 100U)
+    {
+        writePayloadByte(writer, static_cast<std::uint8_t>('0' + (value / 100U)));
+        value = static_cast<std::uint8_t>(value % 100U);
+        writePayloadByte(writer, static_cast<std::uint8_t>('0' + (value / 10U)));
+        writePayloadByte(writer, static_cast<std::uint8_t>('0' + (value % 10U)));
+        return;
+    }
+
+    if (value >= 10U)
+    {
+        writePayloadByte(writer, static_cast<std::uint8_t>('0' + (value / 10U)));
+        writePayloadByte(writer, static_cast<std::uint8_t>('0' + (value % 10U)));
+        return;
+    }
+
+    writePayloadByte(writer, static_cast<std::uint8_t>('0' + value));
+}
+#endif
+
+/**
+ * @brief Build the compact authoritative state publish without a JsonDocument.
+ * @details `ACTUATORS_STATE` has a fixed shallow shape and the packed bytes are
+ *          already validated in `VirtualDevice`. Serializing it directly avoids
+ *          ArduinoJson allocation and generic tree walking on the hottest MQTT
+ *          publish path while still emitting exactly the active wire codec.
+ */
+[[nodiscard]] auto buildPackedStatePublishPayload(lsh::bridge::communication::FixedBufferWriter &writer, const VirtualDevice &virtualDevice)
+    -> bool
+{
+    using namespace lsh::bridge::protocol;
+
+    const std::uint8_t packedByteCount = virtualDevice.getPackedStateByteCount();
+
+#ifdef CONFIG_MSG_PACK_MQTT
+    writePayloadByte(writer, 0x82U);  // fixmap(2): {"p": ACTUATORS_STATE, "s": packed-bytes}
+    writePayloadByte(writer, 0xA1U);
+    writePayloadByte(writer, static_cast<std::uint8_t>('p'));
+    writeMsgPackUint8(writer, static_cast<std::uint8_t>(Command::ACTUATORS_STATE));
+    writePayloadByte(writer, 0xA1U);
+    writePayloadByte(writer, static_cast<std::uint8_t>('s'));
+    writeMsgPackArrayHeader(writer, packedByteCount);
+    for (std::uint8_t byteIndex = 0U; byteIndex < packedByteCount; ++byteIndex)
+    {
+        writeMsgPackUint8(writer, virtualDevice.getPackedStateByte(byteIndex));
+    }
+#else
+    writePayloadLiteral(writer, "{\"p\":");
+    writeJsonUint8(writer, static_cast<std::uint8_t>(Command::ACTUATORS_STATE));
+    writePayloadLiteral(writer, ",\"s\":[");
+    for (std::uint8_t byteIndex = 0U; byteIndex < packedByteCount; ++byteIndex)
+    {
+        if (byteIndex != 0U)
+        {
+            writePayloadByte(writer, static_cast<std::uint8_t>(','));
+        }
+        writeJsonUint8(writer, virtualDevice.getPackedStateByte(byteIndex));
+    }
+    writePayloadLiteral(writer, "]}");
+#endif
+
+    return !writer.overflowed() && writer.size() != 0U;
+}
+
+[[nodiscard]] auto validateInboundNetworkClickFields(std::uint8_t clickType, std::uint8_t clickableId, std::uint8_t correlationId) -> bool;
+
 [[nodiscard]] auto validateInboundNetworkClickCommand(const JsonDocument &commandDocument,
                                                       std::uint8_t &outClickType,
                                                       std::uint8_t &outClickableId,
@@ -75,7 +184,14 @@ constexpr std::uint16_t kTopologyChangedDiagnosticGraceMs =
         return false;
     }
 
-    switch (static_cast<ProtocolClickType>(outClickType))
+    return validateInboundNetworkClickFields(outClickType, outClickableId, outCorrelationId);
+}
+
+[[nodiscard]] auto validateInboundNetworkClickFields(std::uint8_t clickType, std::uint8_t clickableId, std::uint8_t correlationId) -> bool
+{
+    using namespace lsh::bridge::protocol;
+
+    switch (static_cast<ProtocolClickType>(clickType))
     {
     case ProtocolClickType::LONG:
     case ProtocolClickType::SUPER_LONG:
@@ -85,7 +201,7 @@ constexpr std::uint16_t kTopologyChangedDiagnosticGraceMs =
         return false;
     }
 
-    return outClickableId != 0U && outCorrelationId != 0U;
+    return clickableId != 0U && correlationId != 0U;
 }
 
 /**
@@ -124,6 +240,67 @@ constexpr std::uint16_t kTopologyChangedDiagnosticGraceMs =
 #else
     return true;
 #endif
+}
+
+/**
+ * @brief Deserialize only the MQTT command id from one inbound command payload.
+ * @details Most bridge commands need only the `p` field. ArduinoJson's filter
+ *          keeps the safety net of the normal parser while preventing unrelated
+ *          fields from consuming the larger command document on these hot paths.
+ */
+[[nodiscard]] auto deserializeMqttCommandIdDocument(JsonDocument &commandIdDocument, const char *payload, std::size_t payloadLength)
+    -> DeserializationError
+{
+    using namespace lsh::bridge::protocol;
+
+    StaticJsonDocument<JSON_OBJECT_SIZE(1)> commandIdFilter;
+    commandIdFilter[KEY_PAYLOAD] = true;
+
+#ifdef CONFIG_MSG_PACK_MQTT
+    return deserializeMsgPack(commandIdDocument, reinterpret_cast<const std::uint8_t *>(payload), payloadLength,
+                              DeserializationOption::Filter(commandIdFilter), DeserializationOption::NestingLimit(2));
+#else
+    return deserializeJson(commandIdDocument, payload, payloadLength, DeserializationOption::Filter(commandIdFilter),
+                           DeserializationOption::NestingLimit(2));
+#endif
+}
+
+/**
+ * @brief Deserialize one complete MQTT command payload for commands that need fields beyond `p`.
+ */
+[[nodiscard]] auto deserializeMqttCommandDocument(JsonDocument &commandDocument, const char *payload, std::size_t payloadLength)
+    -> DeserializationError
+{
+#ifdef CONFIG_MSG_PACK_MQTT
+    return deserializeMsgPack(commandDocument, reinterpret_cast<const std::uint8_t *>(payload), payloadLength,
+                              DeserializationOption::NestingLimit(2));
+#else
+    return deserializeJson(commandDocument, payload, payloadLength, DeserializationOption::NestingLimit(2));
+#endif
+}
+
+/**
+ * @brief Parse the command id using the smallest possible ArduinoJson document.
+ */
+[[nodiscard]] auto parseMqttCommandId(const char *payload, std::size_t payloadLength, lsh::bridge::protocol::Command &outCommand) -> bool
+{
+    using namespace lsh::bridge::protocol;
+
+    StaticJsonDocument<constants::controllerSerial::MQTT_COMMAND_ID_DOC_SIZE> commandIdDocument;
+    if (deserializeMqttCommandIdDocument(commandIdDocument, payload, payloadLength) != DeserializationError::Ok ||
+        commandIdDocument.overflowed())
+    {
+        return false;
+    }
+
+    std::uint8_t rawCommand = 0U;
+    if (!utils::json::tryGetUint8Scalar(commandIdDocument[KEY_PAYLOAD], rawCommand))
+    {
+        return false;
+    }
+
+    outCommand = static_cast<Command>(rawCommand);
+    return true;
 }
 
 }  // namespace
@@ -199,7 +376,8 @@ public:
         homieNodes.clear();
         MqttTopicsBuilder::updateMqttTopics(virtualDevice.getName().c_str());
 
-        for (std::uint8_t actuatorIndex = 0U; actuatorIndex < virtualDevice.getTotalActuators(); ++actuatorIndex)
+        const std::uint8_t actuatorCount = virtualDevice.getTotalActuators();
+        for (std::uint8_t actuatorIndex = 0U; actuatorIndex < actuatorCount; ++actuatorIndex)
         {
             const auto actuatorId = virtualDevice.getActuatorId(actuatorIndex);
             homieNodes.emplace_back(controllerSerialLink, virtualDevice, actuatorIndex, actuatorId);
@@ -420,6 +598,15 @@ public:
             const bool homiePublished = publishAllHomieNodeStates();
             runtimeState.canServeCachedStateRequests = homiePublished;
             mqttResyncPending = !homiePublished;
+            if (homiePublished)
+            {
+                if (virtualDevice.isFullStatePublishPending())
+                {
+                    virtualDevice.clearFullStatePublishPending();
+                }
+                virtualDevice.clearDirtyActuators();
+                runtimeState.isAuthoritativeStateDirty = false;
+            }
             return homiePublished;
         }
 
@@ -454,14 +641,15 @@ public:
             return;
         }
 
-        const auto now = timeKeeper::getRealTime();
+        const auto now = timeKeeper::getTime();
         if (lastMqttResyncAttemptMs != 0U && (now - lastMqttResyncAttemptMs) < constants::runtime::BOOTSTRAP_REQUEST_INTERVAL_MS)
         {
             return;
         }
 
         lastMqttResyncAttemptMs = now;
-        if (!updateMqttClient() || !subscribeMqttTopics())
+        updateMqttClient();
+        if (!subscribeMqttTopics())
         {
             return;
         }
@@ -574,7 +762,7 @@ public:
             return;
         }
 
-        const auto now = timeKeeper::getRealTime();
+        const auto now = timeKeeper::getTime();
         if (!runtimeState.bootstrapRequestDue &&
             (now - runtimeState.lastBootstrapRequestMs) < constants::runtime::BOOTSTRAP_REQUEST_INTERVAL_MS)
         {
@@ -612,7 +800,7 @@ public:
             return;
         }
 
-        const auto now = timeKeeper::getRealTime();
+        const auto now = timeKeeper::getTime();
         if (!runtimeState.hasPendingTopologySave)
         {
             if (topologyChangedDiagnosticPending && publishSimpleBridgeDiagnostic(kTopologyChangedDiagnostic))
@@ -656,7 +844,7 @@ public:
         // quick successive state frames collapse into one MQTT/Homie refresh wave.
         runtimeState.isAuthoritativeStateDirty = true;
         runtimeState.canServeCachedStateRequests = false;
-        runtimeState.lastAuthoritativeStateUpdateMs = timeKeeper::getRealTime();
+        runtimeState.lastAuthoritativeStateUpdateMs = timeKeeper::getTime();
     }
 
     /**
@@ -669,26 +857,19 @@ public:
      */
     [[nodiscard]] auto publishAuthoritativeLshState() -> bool
     {
-        using namespace lsh::bridge::protocol;
-
         if (!hasDeviceScopedTopics())
         {
             return false;
         }
 
-        StaticJsonDocument<constants::controllerSerial::MQTT_SET_STATE_DOC_SIZE> stateDoc;
-        stateDoc[KEY_PAYLOAD] = static_cast<std::uint8_t>(Command::ACTUATORS_STATE);
-        JsonArray packedStates = stateDoc.createNestedArray(KEY_STATE);
-
-        // The virtual device already stores the authoritative state in the same
-        // compact bit order used on MQTT, so publishing is just a byte export.
-        const auto packedByteCount = virtualDevice.getPackedStateByteCount();
-        for (std::uint8_t byteIndex = 0U; byteIndex < packedByteCount; ++byteIndex)
+        char payloadBuffer[constants::controllerSerial::MQTT_PUBLISH_MESSAGE_MAX_SIZE];
+        lsh::bridge::communication::FixedBufferWriter payloadWriter(payloadBuffer, sizeof(payloadBuffer));
+        if (!buildPackedStatePublishPayload(payloadWriter, virtualDevice))
         {
-            packedStates.add(virtualDevice.getPackedStateByte(byteIndex));
+            return false;
         }
 
-        return MqttPublisher::sendJson(stateDoc, MqttTopicsBuilder::mqttOutStateTopic.c_str(), true, 1);
+        return MqttPublisher::sendRaw(MqttTopicsBuilder::mqttOutStateTopic.c_str(), true, 1, payloadWriter.data(), payloadWriter.size());
     }
 
     /**
@@ -730,7 +911,8 @@ public:
     [[nodiscard]] auto publishChangedHomieNodeStates() -> bool
     {
         bool allPublished = true;
-        for (std::uint8_t actuatorIndex = 0U; actuatorIndex < virtualDevice.getTotalActuators(); ++actuatorIndex)
+        const std::uint8_t actuatorCount = virtualDevice.getTotalActuators();
+        for (std::uint8_t actuatorIndex = 0U; actuatorIndex < actuatorCount; ++actuatorIndex)
         {
             if (virtualDevice.isActuatorDirtyUnchecked(actuatorIndex))
             {
@@ -755,7 +937,12 @@ public:
             return;
         }
 
-        const auto now = timeKeeper::getRealTime();
+        if (!Homie.isConnected())
+        {
+            return;
+        }
+
+        const auto now = timeKeeper::getTime();
         if ((now - runtimeState.lastAuthoritativeStateUpdateMs) < constants::runtime::STATE_PUBLISH_SETTLE_INTERVAL_MS)
         {
             return;
@@ -927,11 +1114,9 @@ public:
             {
                 if (!MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 2))
                 {
-                    const char *const dropReason =
-                        code == DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM
+                    DPL(code == DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM
                             ? "Dropping controller NETWORK_CLICK_CONFIRM because the MQTT client did not accept the publish."
-                            : "Dropping controller event payload because the MQTT client did not accept the publish.";
-                    DPL(dropReason);
+                            : "Dropping controller event payload because the MQTT client did not accept the publish.");
                 }
             }
             break;
@@ -969,13 +1154,8 @@ public:
      * @details The Homie runtime owns the actual `AsyncMqttClient` instance.
      *          This helper keeps bridge-side callback registration and publisher
      *          binding synchronized with that instance across reconnects.
-     *
-     * @return true if the current Homie MQTT client is ready for bridge-side use.
-     * @return false is currently unreachable in the present implementation, but
-     *         the boolean return keeps the call site readable and leaves room
-     *         for future initialization checks.
      */
-    [[nodiscard]] auto updateMqttClient() -> bool
+    void updateMqttClient()
     {
         // Homie exposes its MQTT client as a reference, so reaching this point
         // always yields one concrete AsyncMqttClient instance.
@@ -985,7 +1165,7 @@ public:
         {
             // The same AsyncMqttClient instance survived the reconnect, so only the
             // subscriptions may need refreshing.
-            return true;
+            return;
         }
 
         mqttClient = &nextClient;
@@ -999,8 +1179,6 @@ public:
             mqttClient->onMessage(LSHBridge::onMqttMessageStatic);
             mqttMessageBoundClient = &nextClient;
         }
-
-        return true;
     }
 
     /**
@@ -1052,16 +1230,16 @@ public:
     }
 
     /**
-     * @brief Handles MQTT commands that the bridge understands semantically.
-     * @details Unsupported commands fall back to raw forwarding so the
-     *          runtime remains compatible with legacy or future controller
-     *          commands.
+     * @brief Handles MQTT commands that need fields beyond the command id.
+     * @details Stateless commands are handled before the caller allocates a full
+     *          document. This function intentionally contains only commands whose
+     *          payload must be inspected or normalized before reaching the UART.
      *
      * @param commandDocument validated MQTT command decoded from the current
      *        inbound frame.
      * @return TypedCommandResult::Handled when the bridge consumed the command.
-     * @return TypedCommandResult::Unsupported when the bridge does not assign
-     *         any local meaning to that payload type and callers may raw-forward it.
+     * @return TypedCommandResult::Unsupported when this helper was called with a
+     *         command that should have stayed on the stateless/raw-forward path.
      * @return TypedCommandResult::Invalid when the payload type is known but its
      *         concrete fields do not pass bridge-side validation.
      * @return TypedCommandResult::DeliveryFailed when the command was valid but
@@ -1074,40 +1252,6 @@ public:
 
         switch (command)
         {
-        case Command::REQUEST_DETAILS:
-            // DEVICE_DETAILS can be served from the cached validated topology. If
-            // that cache is missing, keep the bridge online and ask the
-            // controller for a fresh authoritative topology instead.
-            if (!virtualDevice.hasCachedDetails())
-            {
-                enterWaitingForDetails();
-            }
-            else
-            {
-                return publishCachedDetails() ? TypedCommandResult::Handled : TypedCommandResult::DeliveryFailed;
-            }
-            return TypedCommandResult::Handled;
-
-        case Command::REQUEST_STATE:
-            // Prefer the local cache only when it is known to mirror a controller-
-            // backed snapshot from the current session. Otherwise ask the controller.
-            if (!tryServeCachedStateRequest() && controllerSerialLink.isConnected())
-            {
-                if (!virtualDevice.hasCachedDetails() || runtimeState.bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
-                {
-                    enterWaitingForDetails();
-                }
-                else
-                {
-                    requestAuthoritativeStateRefresh();
-                }
-            }
-            return TypedCommandResult::Handled;
-
-        case Command::FAILOVER:
-            return controllerSerialLink.sendJson(constants::payloads::StaticType::GENERAL_FAILOVER) ? TypedCommandResult::Handled
-                                                                                                    : TypedCommandResult::DeliveryFailed;
-
         case Command::SET_SINGLE_ACTUATOR:
         {
             std::uint8_t actuatorId = 0U;
@@ -1130,9 +1274,6 @@ public:
         case Command::NETWORK_CLICK_ACK:
         case Command::FAILOVER_CLICK:
         {
-            // Click payloads are tiny and structurally simple, so the bridge rebuilds
-            // a compact serial document instead of forwarding unknown fields.
-            StaticJsonDocument<constants::controllerSerial::MQTT_RECEIVED_DOC_MAX_SIZE> serialDoc;
             std::uint8_t clickType = 0U;
             std::uint8_t clickableId = 0U;
             std::uint8_t correlationId = 0U;
@@ -1142,24 +1283,13 @@ public:
                 return TypedCommandResult::Invalid;
             }
 
-            serialDoc[KEY_PAYLOAD] = static_cast<std::uint8_t>(command);
-            serialDoc[KEY_TYPE] = clickType;
-            serialDoc[KEY_ID] = clickableId;
-            serialDoc[KEY_CORRELATION_ID] = correlationId;
-            if (!controllerSerialLink.sendJson(serialDoc))
+            if (!controllerSerialLink.sendClickCommand(command, clickType, clickableId, correlationId))
             {
                 return TypedCommandResult::DeliveryFailed;
             }
 
             return TypedCommandResult::Handled;
         }
-
-        case Command::NETWORK_CLICK_REQUEST:
-        case Command::NETWORK_CLICK_CONFIRM:
-            // These payloads are controller-originated events. Forwarding them
-            // from MQTT into the controller would only create a silent no-op on
-            // the core side, so the bridge rejects them explicitly.
-            return TypedCommandResult::Invalid;
 
         default:
             return TypedCommandResult::Unsupported;
@@ -1195,6 +1325,64 @@ public:
     }
 
     /**
+     * @brief Decode and handle one document-backed MQTT command with a command-specific pool size.
+     * @details Only a few device-topic commands need fields beyond `p`. Keeping
+     *          their JsonDocument capacity explicit avoids paying the worst-case
+     *          `SET_STATE` pool for smaller actuator/click commands while still
+     *          preserving ArduinoJson's malformed-payload safety net.
+     */
+    template <std::uint16_t DocumentCapacity>
+    void processDocumentBackedDeviceTopicCommand(lsh::bridge::protocol::Command command, const char *payload, std::size_t payloadLength)
+    {
+        using namespace lsh::bridge::protocol;
+
+        StaticJsonDocument<DocumentCapacity> commandDocument;
+        if (deserializeMqttCommandDocument(commandDocument, payload, payloadLength) != DeserializationError::Ok ||
+            commandDocument.overflowed())
+        {
+            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Malformed);
+            DPL("Dropping MQTT command because the full payload is not valid JSON/MsgPack "
+                "for the active MQTT codec.");
+            return;
+        }
+
+        std::uint8_t fullDocumentCommandId = 0U;
+        if (!utils::json::tryGetUint8Scalar(commandDocument[KEY_PAYLOAD], fullDocumentCommandId) ||
+            fullDocumentCommandId != static_cast<std::uint8_t>(command))
+        {
+            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Malformed);
+            DPL("Dropping MQTT command because the command id changed between lightweight and full decode.");
+            return;
+        }
+
+        const auto typedCommandResult = forwardTypedControllerCommand(command, commandDocument);
+        if (typedCommandResult == TypedCommandResult::Handled)
+        {
+            return;
+        }
+
+        if (typedCommandResult == TypedCommandResult::Invalid)
+        {
+            DPL("Dropping invalid MQTT command for a bridge-known payload type. "
+                "The bridge recognized the command ID but rejected this specific "
+                "payload instead of raw-forwarding it to the controller.");
+            return;
+        }
+
+        if (typedCommandResult == TypedCommandResult::DeliveryFailed)
+        {
+            DPL("Dropping bridge-known MQTT command because the bridge could not "
+                "deliver the resulting publish or serial write.");
+            return;
+        }
+
+        // Reaching Unsupported here would mean the lightweight routing table and
+        // the document-backed handler drifted apart. Drop loudly in debug builds
+        // rather than raw-forwarding a bridge-known command through the wrong path.
+        DPL("Dropping MQTT command because internal command routing is inconsistent.");
+    }
+
+    /**
      * @brief Process one validated device-topic MQTT command.
      * @details Device-topic commands are device-scoped and therefore may touch
      *          controller-backed state, bridge lifecycle, or both. The bridge
@@ -1204,12 +1392,11 @@ public:
      * @param command parsed command identifier.
      * @param payload raw MQTT payload bytes as received from the broker.
      * @param payloadLength number of bytes available at `payload`.
-     * @param commandDocument decoded representation of the same MQTT payload.
      */
     void processDeviceTopicCommand(lsh::bridge::protocol::Command command,
                                    const char *payload,
                                    std::size_t payloadLength,
-                                   const JsonDocument &commandDocument)
+                                   const DecodedMqttCommand *decodedCommand)
     {
         using namespace lsh::bridge::protocol;
 
@@ -1235,7 +1422,70 @@ public:
             }
             return;
 
+        case Command::REQUEST_DETAILS:
+            // DEVICE_DETAILS can be served from the cached validated topology. If
+            // that cache is missing, keep the bridge online and ask the
+            // controller for a fresh authoritative topology instead.
+            if (!virtualDevice.hasCachedDetails())
+            {
+                enterWaitingForDetails();
+            }
+            else if (!publishCachedDetails())
+            {
+                DPL("Dropping REQUEST_DETAILS reply because the MQTT client did not accept the cached topology publish.");
+            }
+            return;
+
+        case Command::REQUEST_STATE:
+            // Prefer the local cache only when it is known to mirror a controller-
+            // backed snapshot from the current session. Otherwise ask the controller.
+            if (!tryServeCachedStateRequest() && controllerSerialLink.isConnected())
+            {
+                if (!virtualDevice.hasCachedDetails() || runtimeState.bootstrapPhase == BootstrapPhase::WAITING_FOR_DETAILS)
+                {
+                    enterWaitingForDetails();
+                }
+                else
+                {
+                    requestAuthoritativeStateRefresh();
+                }
+            }
+            return;
+
+        case Command::FAILOVER:
+            if (!controllerSerialLink.sendJson(constants::payloads::StaticType::GENERAL_FAILOVER))
+            {
+                DPL("Dropping FAILOVER command because the UART did not accept the bridge-local failover frame.");
+            }
+            return;
+
+        case Command::NETWORK_CLICK_REQUEST:
+        case Command::NETWORK_CLICK_CONFIRM:
+            // These are controller-originated events. Accepting them from MQTT
+            // would turn an upstream event channel into a confusing command loop.
+            DPL("Dropping MQTT command because the command id belongs to a controller-originated event.");
+            return;
+
         case Command::SET_SINGLE_ACTUATOR:
+            // During re-sync or topology migration the bridge must not reinterpret
+            // actuator writes against a stale cached model. Dropping them is
+            // safer than forwarding ambiguous intent to the controller.
+            if (!virtualDevice.isRuntimeSynchronized())
+            {
+                return;
+            }
+            if (decodedCommand != nullptr && decodedCommand->shape == DecodedMqttCommandShape::SetSingleActuator)
+            {
+                if (!controllerSerialLink.stageSingleActuatorCommand(decodedCommand->actuatorId, decodedCommand->state))
+                {
+                    DPL("Dropping invalid MQTT SET_SINGLE_ACTUATOR command decoded by the shallow parser.");
+                }
+                return;
+            }
+            processDocumentBackedDeviceTopicCommand<constants::controllerSerial::MQTT_SET_SINGLE_ACTUATOR_DOC_SIZE>(command, payload,
+                                                                                                                    payloadLength);
+            return;
+
         case Command::SET_STATE:
             // During re-sync or topology migration the bridge must not reinterpret
             // actuator writes against a stale cached model. Dropping them is
@@ -1244,41 +1494,47 @@ public:
             {
                 return;
             }
-            break;
+            if (decodedCommand != nullptr && decodedCommand->shape == DecodedMqttCommandShape::SetPackedState)
+            {
+                if (!controllerSerialLink.stageDesiredPackedStateBytes(decodedCommand->packedStateBytes, decodedCommand->packedStateLength))
+                {
+                    DPL("Dropping invalid MQTT SET_STATE command decoded by the shallow parser.");
+                }
+                return;
+            }
+            processDocumentBackedDeviceTopicCommand<constants::controllerSerial::MQTT_SET_STATE_DOC_SIZE>(command, payload, payloadLength);
+            return;
+
+        case Command::NETWORK_CLICK_ACK:
+        case Command::FAILOVER_CLICK:
+            if (decodedCommand != nullptr && decodedCommand->shape == DecodedMqttCommandShape::Click)
+            {
+                if (!validateInboundNetworkClickFields(decodedCommand->clickType, decodedCommand->clickableId,
+                                                       decodedCommand->correlationId))
+                {
+                    DPL("Dropping invalid MQTT click command decoded by the shallow parser.");
+                    return;
+                }
+
+                if (!controllerSerialLink.sendClickCommand(command, decodedCommand->clickType, decodedCommand->clickableId,
+                                                           decodedCommand->correlationId))
+                {
+                    DPL("Dropping bridge-known MQTT click command because the UART did not accept the direct frame.");
+                }
+                return;
+            }
+            processDocumentBackedDeviceTopicCommand<constants::controllerSerial::MQTT_CLICK_DOC_SIZE>(command, payload, payloadLength);
+            return;
 
         default:
             break;
         }
 
-        const auto typedCommandResult = forwardTypedControllerCommand(command, commandDocument);
-        if (typedCommandResult == TypedCommandResult::Handled)
+        if (!forwardUnsupportedCommandToController(payload, payloadLength))
         {
-            return;
-        }
-
-        if (typedCommandResult == TypedCommandResult::Invalid)
-        {
-            DPL("Dropping invalid MQTT command for a bridge-known payload type. "
-                "The bridge recognized the command ID but rejected this specific "
-                "payload instead of raw-forwarding it to the controller.");
-            return;
-        }
-
-        if (typedCommandResult == TypedCommandResult::DeliveryFailed)
-        {
-            DPL("Dropping bridge-known MQTT command because the bridge could not "
-                "deliver the resulting publish or serial write.");
-            return;
-        }
-
-        if (typedCommandResult == TypedCommandResult::Unsupported)
-        {
-            if (!forwardUnsupportedCommandToController(payload, payloadLength))
-            {
-                DPL("Dropping unsupported MQTT command because the bridge cannot "
-                    "safely translate an unknown payload across different MQTT "
-                    "and serial codecs.");
-            }
+            DPL("Dropping unsupported MQTT command because the bridge cannot "
+                "safely translate an unknown payload across different MQTT "
+                "and serial codecs.");
         }
     }
 
@@ -1297,8 +1553,10 @@ public:
         switch (command)
         {
         case Command::BOOT:
+            // The service-topic BOOT only asks the bridge to refresh its MQTT-side
+            // mirror. The main loop already owns the resync pacing logic, so keep
+            // this path side-effect free and let the queued loop phase execute it.
             scheduleMqttResyncNow();
-            processPendingMqttResync();
             return;
 
         case Command::SYSTEM_RESET:
@@ -1337,30 +1595,11 @@ public:
     {
         using namespace lsh::bridge::protocol;
 
-        StaticJsonDocument<constants::controllerSerial::MQTT_RECEIVED_DOC_MAX_SIZE> commandDocument;
+        DecodedMqttCommand decodedCommand{};
+        const bool shallowDecoded = decodeMqttCommandShallow(payload, payloadLength, decodedCommand);
 
-#ifdef CONFIG_MSG_PACK_MQTT
-        // MQTT control payloads are intentionally shallow: one object plus maybe
-        // one state array. Limiting nesting keeps parsing predictable and cheap.
-        const DeserializationError deserializationError = deserializeMsgPack(
-            commandDocument, reinterpret_cast<const std::uint8_t *>(payload), payloadLength, DeserializationOption::NestingLimit(2));
-#else
-        // MQTT control payloads are intentionally shallow: one object plus maybe
-        // one state array. Limiting nesting keeps parsing predictable and cheap.
-        const DeserializationError deserializationError =
-            deserializeJson(commandDocument, payload, payloadLength, DeserializationOption::NestingLimit(2));
-#endif
-
-        if (deserializationError != DeserializationError::Ok)
-        {
-            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Malformed);
-            DPL("Dropping MQTT command because the payload is not valid JSON/MsgPack "
-                "for the active MQTT codec.");
-            return;
-        }
-
-        std::uint8_t rawCommand = 0U;
-        if (!utils::json::tryGetUint8Scalar(commandDocument[KEY_PAYLOAD], rawCommand))
+        Command command = decodedCommand.command;
+        if (!shallowDecoded && !parseMqttCommandId(payload, payloadLength, command))
         {
             mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Malformed);
             DPL("Dropping MQTT command because the payload is missing a valid uint8 "
@@ -1368,14 +1607,13 @@ public:
             return;
         }
 
-        const auto command = static_cast<Command>(rawCommand);
         if (source == MqttCommandSource::Service)
         {
             processServiceTopicCommand(command);
             return;
         }
 
-        processDeviceTopicCommand(command, payload, payloadLength, commandDocument);
+        processDeviceTopicCommand(command, payload, payloadLength, shallowDecoded ? &decodedCommand : nullptr);
     }
 
     /**
@@ -1395,15 +1633,15 @@ public:
 
         while (processedCommands < maxCommandsThisLoop)
         {
-            QueuedMqttCommand queuedCommand{};
+            QueuedMqttCommand queuedCommand;
             if (!mqttCommandQueue.dequeue(queuedCommand))
             {
                 return;
             }
 
             // The queue stores raw bytes, but once the frame is dequeued it is safe
-            // to reinterpret them as `char*` because JSON parsing and MsgPack
-            // deserialization both just read the contiguous payload bytes.
+            // to reinterpret them as `const char*`: both the lightweight command-id
+            // decode and any later full parse only read the contiguous payload bytes.
             processInboundMqttCommand(queuedCommand.source, reinterpret_cast<const char *>(queuedCommand.payload), queuedCommand.length);
             ++processedCommands;
 
@@ -1424,8 +1662,8 @@ public:
      * @param index chunk start offset inside the full publish payload.
      * @param total total payload size announced by AsyncMqttClient.
      */
-    void handleMqttMessage(char *topic,
-                           char *payload,
+    void handleMqttMessage(const char *topic,
+                           const char *payload,
                            AsyncMqttClientMessageProperties properties,
                            std::size_t len,
                            std::size_t index,
@@ -1503,8 +1741,14 @@ LSHBridge *LSHBridge::activeInstance = nullptr;
  *
  * @param options runtime options.
  */
-LSHBridge::LSHBridge(BridgeOptions options) : implementation(std::make_unique<Impl>(options))
-{}
+LSHBridge::LSHBridge(BridgeOptions options)
+{
+    static_assert(sizeof(Impl) <= detail::BRIDGE_IMPL_STORAGE_SIZE,
+                  "LSHBridge::Impl does not fit in opaque storage. Increase CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE.");
+    static_assert(alignof(Impl) <= alignof(std::max_align_t), "LSHBridge::Impl alignment is larger than std::max_align_t.");
+
+    this->implementation = new (static_cast<void *>(this->implementationStorage)) Impl(options);
+}
 
 /**
  * @brief Destroy the bridge facade and detach static callback state if needed.
@@ -1515,6 +1759,12 @@ LSHBridge::~LSHBridge()
     {
         MqttPublisher::setMqttClient(nullptr);
         activeInstance = nullptr;
+    }
+
+    if (this->implementation != nullptr)
+    {
+        this->implementation->~Impl();
+        this->implementation = nullptr;
     }
 }
 
@@ -1527,7 +1777,8 @@ LSHBridge::~LSHBridge()
  */
 void LSHBridge::begin()
 {
-    if (this->implementation->isStarted)
+    auto &impl = *this->implementation;
+    if (impl.isStarted)
     {
         return;
     }
@@ -1539,18 +1790,18 @@ void LSHBridge::begin()
 
     activeInstance = this;
     timeKeeper::update();
-    this->implementation->controllerSerialLink.begin();
-    (void)this->implementation->loadCachedDetailsFromFlash();
-    this->implementation->configureHomie();
+    impl.controllerSerialLink.begin();
+    (void)impl.loadCachedDetailsFromFlash();
+    impl.configureHomie();
     Homie.onEvent(onHomieEventStatic);
-    this->implementation->runtimeState.isControllerConnected = this->implementation->controllerSerialLink.isConnected();
+    impl.runtimeState.isControllerConnected = impl.controllerSerialLink.isConnected();
 
-    auto runtimeDelegate = ControllerSerialLink::MessageCallback::create<Impl, &Impl::handleControllerSerialMessage>(*this->implementation);
-    this->implementation->controllerSerialLink.onMessage(runtimeDelegate);
+    auto runtimeDelegate = ControllerSerialLink::MessageCallback::create<Impl, &Impl::handleControllerSerialMessage>(impl);
+    impl.controllerSerialLink.onMessage(runtimeDelegate);
 
     Homie.setup();
-    this->implementation->isStarted = true;
-    this->implementation->enterWaitingForDetails();
+    impl.isStarted = true;
+    impl.enterWaitingForDetails();
 
 #ifdef HOMIE_RESET
     if (Homie.isConfigured())
@@ -1566,28 +1817,29 @@ void LSHBridge::begin()
  */
 void LSHBridge::loop()
 {
-    if (!this->implementation->isStarted)
+    auto &impl = *this->implementation;
+    if (!impl.isStarted)
     {
         return;
     }
 
-    Homie.loop();
     timeKeeper::update();
+    Homie.loop();
 
-    if (this->implementation->serial->available())
+    if (impl.serial->available())
     {
-        this->implementation->controllerSerialLink.processSerialBuffer();
+        impl.controllerSerialLink.processSerialBuffer();
     }
 
-    this->implementation->processQueuedMqttCommands();
-    this->implementation->refreshControllerConnectivity();
-    this->implementation->processPendingMqttResync();
-    this->implementation->processBootstrapProgress();
-    this->implementation->processPendingTopologyMigration();
-    this->implementation->controllerSerialLink.processPendingActuatorBatch();
-    this->implementation->processPendingStatePublishes();
-    this->implementation->publishPendingBridgeDiagnostics();
-    if (!this->implementation->controllerSerialLink.sendJson(constants::payloads::StaticType::PING_))
+    impl.processQueuedMqttCommands();
+    impl.refreshControllerConnectivity();
+    impl.processPendingMqttResync();
+    impl.processBootstrapProgress();
+    impl.processPendingTopologyMigration();
+    impl.controllerSerialLink.processPendingActuatorBatch();
+    impl.processPendingStatePublishes();
+    impl.publishPendingBridgeDiagnostics();
+    if (!impl.controllerSerialLink.sendJson(constants::payloads::StaticType::PING_))
     {
         // A rejected heartbeat is harmless here: either the ping interval is
         // still closed or the UART refused the frame. In both cases the next
@@ -1639,6 +1891,9 @@ void LSHBridge::onHomieEventStatic(const HomieEvent &event)
  * @param index fragment index.
  * @param total total payload length.
  */
+// AsyncMqttClient's callback ABI exposes mutable pointers. The bridge treats
+// both buffers as read-only and immediately forwards them to a const-correct
+// instance method after the ABI boundary.
 void LSHBridge::onMqttMessageStatic(char *topic,
                                     char *payload,
                                     AsyncMqttClientMessageProperties properties,

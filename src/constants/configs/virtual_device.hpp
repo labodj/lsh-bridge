@@ -35,18 +35,22 @@ namespace virtualDevice
 #ifndef CONFIG_MAX_ACTUATORS
 static constexpr const std::uint8_t MAX_ACTUATORS = 12U;  //!< Default max actuators
 #else
+static_assert(CONFIG_MAX_ACTUATORS <= UINT8_MAX, "CONFIG_MAX_ACTUATORS must fit in uint8_t.");
 static constexpr const std::uint8_t MAX_ACTUATORS = CONFIG_MAX_ACTUATORS;  //!< Max actuators
 #endif  // CONFIG_MAX_ACTUATORS
 
 #ifndef CONFIG_MAX_BUTTONS
 static constexpr const std::uint8_t MAX_BUTTONS = 12U;  //!< Default max buttons
 #else
+static_assert(CONFIG_MAX_BUTTONS <= UINT8_MAX, "CONFIG_MAX_BUTTONS must fit in uint8_t.");
 static constexpr const std::uint8_t MAX_BUTTONS = CONFIG_MAX_BUTTONS;  //!< Max buttons
 #endif  // CONFIG_MAX_BUTTONS
 
 #ifndef CONFIG_MAX_NAME_LENGTH
 static constexpr const std::uint8_t MAX_NAME_LENGTH = 4U;  //!< Default max device name length
 #else
+static_assert(CONFIG_MAX_NAME_LENGTH > 0U, "CONFIG_MAX_NAME_LENGTH must be greater than 0.");
+static_assert(CONFIG_MAX_NAME_LENGTH <= UINT8_MAX, "CONFIG_MAX_NAME_LENGTH must fit in uint8_t.");
 static constexpr const std::uint8_t MAX_NAME_LENGTH = CONFIG_MAX_NAME_LENGTH;  //!< Max device name length
 #endif  // CONFIG_MAX_NAME_LENGTH
 }  // namespace virtualDevice

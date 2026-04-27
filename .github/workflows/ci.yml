@@ -38,7 +38,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: ["release", "release_aggressive"]
+        env:
+          - release
+          - release_aggressive
+          - release_json_serial
+          - release_msgpack_mqtt
+          - release_json_serial_msgpack_mqtt
 
     steps:
       - name: Checkout repository

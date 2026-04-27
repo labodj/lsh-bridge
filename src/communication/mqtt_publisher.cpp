@@ -48,9 +48,32 @@ void setMqttClient(AsyncMqttClient *const client)
 }
 
 /**
- * @brief Send a Json message to MQTT.
+ * @brief Publish one already-serialized MQTT payload.
  *
- * @param jsonDoc the json payload to send.
+ * @param topic destination topic.
+ * @param retain MQTT retain flag.
+ * @param qos MQTT QoS.
+ * @param payload serialized payload bytes.
+ * @param payloadSize number of bytes to publish.
+ * @return true if AsyncMqttClient accepted the publish and returned a packet id.
+ * @return false if the client/topic/payload is not publishable right now.
+ */
+auto sendRaw(const char *const topic, bool retain, std::uint8_t qos, const char *const payload, std::size_t payloadSize) -> bool
+{
+    if (mqttClient == nullptr || topic == nullptr || topic[0] == '\0' || payload == nullptr || payloadSize == 0U)
+    {
+        return false;
+    }
+
+    return mqttClient->publish(topic, qos, retain, payload, payloadSize) != 0U;
+}
+
+/**
+ * @brief Serialize and publish one ArduinoJson document through the active MQTT codec.
+ * @details JSON MQTT builds emit JSON text, while MsgPack MQTT builds serialize
+ *          the same document model as MessagePack bytes.
+ *
+ * @param jsonDoc document payload to send.
  * @param topic the topic.
  * @param retain if the message must be retained by MQTT broker.
  * @param qos MQTT QoS used for the publish call.
@@ -60,12 +83,12 @@ void setMqttClient(AsyncMqttClient *const client)
 auto sendJson(const JsonDocument &jsonDoc, const char *const topic, bool retain, std::uint8_t qos) -> bool
 {
     DP_CONTEXT();
-    DP("↑ Topic: ", topic, " | Retain: ", retain, " | Json to send: ");
+    DP("↑ Topic: ", topic, " | Retain: ", retain, " | Document to send: ");
     DPJ(jsonDoc);
 
     using constants::controllerSerial::MQTT_PUBLISH_MESSAGE_MAX_SIZE;
 
-    if (mqttClient == nullptr || topic == nullptr || topic[0] == '\0')
+    if (mqttClient == nullptr || topic == nullptr || topic[0] == '\0' || jsonDoc.overflowed())
     {
         return false;
     }
@@ -81,16 +104,15 @@ auto sendJson(const JsonDocument &jsonDoc, const char *const topic, bool retain,
     {
         return false;
     }
-    DPL("Json size: ", size);
-    // `publish()` expects a raw byte pointer plus its exact size. `buffer`
-    // already contains a contiguous serialized payload in the active codec.
-    return static_cast<bool>(mqttClient->publish(topic, qos, retain, bufferWriter.data(), bufferWriter.size()));
+    DPL("Serialized MQTT payload size: ", size);
+
+    return sendRaw(topic, retain, qos, bufferWriter.data(), bufferWriter.size());
 }
 
 /**
  * @brief Send one compile-time pre-serialized static payload to MQTT.
  *
- * @param payloadType type of the json to send.
+ * @param payloadType pre-serialized payload type to send.
  * @return true if message has been sent.
  * @return false if message hs not been sent.
  */
@@ -116,8 +138,8 @@ auto sendJson(constants::payloads::StaticType payloadType) -> bool
 
     // Static payloads are pre-serialized at compile time, so this path can
     // publish them directly without building a temporary JsonDocument.
-    return static_cast<bool>(mqttClient->publish(MqttTopicsBuilder::mqttOutEventsTopic.c_str(), 1, false,
-                                                 reinterpret_cast<const char *>(payloadToSend.data()), payloadToSend.size()));
+    return sendRaw(MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 1, reinterpret_cast<const char *>(payloadToSend.data()),
+                   payloadToSend.size());
 }
 
 }  // namespace MqttPublisher

@@ -21,6 +21,7 @@
 #ifndef LSH_BRIDGE_COMMUNICATION_MQTT_PUBLISHER_HPP
 #define LSH_BRIDGE_COMMUNICATION_MQTT_PUBLISHER_HPP
 
+#include <cstddef>
 #include <cstdint>
 
 #include <ArduinoJson.h>
@@ -34,6 +35,8 @@ namespace MqttPublisher
 void setMqttClient(AsyncMqttClient *client);
 
 [[nodiscard]] auto sendJson(const JsonDocument &jsonDoc, const char *topic, bool retain, std::uint8_t qos) -> bool;
+
+[[nodiscard]] auto sendRaw(const char *topic, bool retain, std::uint8_t qos, const char *payload, std::size_t payloadSize) -> bool;
 
 [[nodiscard]] auto sendJson(constants::payloads::StaticType payloadType) -> bool;
 }  // namespace MqttPublisher

@@ -21,7 +21,9 @@
 #ifndef LSH_BRIDGE_CONSTANTS_CONFIGS_MQTT_HPP
 #define LSH_BRIDGE_CONSTANTS_CONFIGS_MQTT_HPP
 
+#include <cstddef>
 #include <cstdint>
+#include <string>
 
 #include "virtual_device.hpp"
 
@@ -74,50 +76,55 @@ static constexpr const char *MQTT_TOPIC_SERVICE = "LSH/Node-RED/SRV";  //!< Defa
 #else
 static constexpr const char *MQTT_TOPIC_SERVICE = CONFIG_MQTT_TOPIC_SERVICE;  //!< Service topic
 #endif  // CONFIG_MQTT_TOPIC_SERVICE
-static constexpr const std::uint8_t MQTT_BASE_TOPIC_LENGTH = std::char_traits<char>::length(MQTT_TOPIC_BASE) + 1U +
-                                                             virtualDevice::MAX_NAME_LENGTH +
-                                                             3U;  //!< Maximum length of the common `LSH/deviceName/` topic prefix.
-static constexpr const std::uint8_t MQTT_MAX_IN_TOPIC_LENGTH =
-    MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_INPUT) +
-    2U;  //!< Maximum length of the inbound command topic, for example `LSH/deviceName/IN`.
+namespace detail
+{
+constexpr std::size_t MQTT_BASE_TOPIC_LENGTH_VALUE =
+    std::char_traits<char>::length(MQTT_TOPIC_BASE) + 1U + virtualDevice::MAX_NAME_LENGTH + 3U;
+constexpr std::size_t MQTT_MAX_IN_TOPIC_LENGTH_VALUE = MQTT_BASE_TOPIC_LENGTH_VALUE + std::char_traits<char>::length(MQTT_TOPIC_INPUT) + 2U;
+constexpr std::size_t MQTT_MAX_OUT_STATE_TOPIC_LENGTH_VALUE =
+    MQTT_BASE_TOPIC_LENGTH_VALUE + std::char_traits<char>::length(MQTT_TOPIC_STATE) + 2U;
+constexpr std::size_t MQTT_MAX_OUT_CONF_TOPIC_LENGTH_VALUE =
+    MQTT_BASE_TOPIC_LENGTH_VALUE + std::char_traits<char>::length(MQTT_TOPIC_CONF) + 2U;
+constexpr std::size_t MQTT_MAX_OUT_EVENTS_TOPIC_LENGTH_VALUE =
+    MQTT_BASE_TOPIC_LENGTH_VALUE + std::char_traits<char>::length(MQTT_TOPIC_EVENTS) + 2U;
+constexpr std::size_t MQTT_MAX_OUT_BRIDGE_TOPIC_LENGTH_VALUE =
+    MQTT_BASE_TOPIC_LENGTH_VALUE + std::char_traits<char>::length(MQTT_TOPIC_BRIDGE) + 2U;
+}  // namespace detail
+
+static_assert(detail::MQTT_BASE_TOPIC_LENGTH_VALUE <= UINT8_MAX,
+              "Derived MQTT base topic length must fit in uint8_t. Shorten CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
+static_assert(
+    detail::MQTT_MAX_IN_TOPIC_LENGTH_VALUE <= UINT8_MAX,
+    "Derived MQTT input topic length must fit in uint8_t. Shorten CONFIG_MQTT_TOPIC_INPUT, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
+static_assert(
+    detail::MQTT_MAX_OUT_STATE_TOPIC_LENGTH_VALUE <= UINT8_MAX,
+    "Derived MQTT state topic length must fit in uint8_t. Shorten CONFIG_MQTT_TOPIC_STATE, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
+static_assert(
+    detail::MQTT_MAX_OUT_CONF_TOPIC_LENGTH_VALUE <= UINT8_MAX,
+    "Derived MQTT config topic length must fit in uint8_t. Shorten CONFIG_MQTT_TOPIC_CONF, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
+static_assert(
+    detail::MQTT_MAX_OUT_EVENTS_TOPIC_LENGTH_VALUE <= UINT8_MAX,
+    "Derived MQTT events topic length must fit in uint8_t. Shorten CONFIG_MQTT_TOPIC_EVENTS, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
+static_assert(
+    detail::MQTT_MAX_OUT_BRIDGE_TOPIC_LENGTH_VALUE <= UINT8_MAX,
+    "Derived MQTT bridge topic length must fit in uint8_t. Shorten CONFIG_MQTT_TOPIC_BRIDGE, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
+
+/** @brief Maximum length of the common `LSH/deviceName/` topic prefix. */
+static constexpr const std::uint8_t MQTT_BASE_TOPIC_LENGTH = static_cast<std::uint8_t>(detail::MQTT_BASE_TOPIC_LENGTH_VALUE);
+/** @brief Maximum length of the inbound command topic, for example `LSH/deviceName/IN`. */
+static constexpr const std::uint8_t MQTT_MAX_IN_TOPIC_LENGTH = static_cast<std::uint8_t>(detail::MQTT_MAX_IN_TOPIC_LENGTH_VALUE);
+/** @brief Maximum length of the outbound state topic, for example `LSH/deviceName/state`. */
 static constexpr const std::uint8_t MQTT_MAX_OUT_STATE_TOPIC_LENGTH =
-    MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_STATE) +
-    2U;  //!< Maximum length of the outbound state topic, for example `LSH/deviceName/state`.
+    static_cast<std::uint8_t>(detail::MQTT_MAX_OUT_STATE_TOPIC_LENGTH_VALUE);
+/** @brief Maximum length of the outbound configuration topic, for example `LSH/deviceName/conf`. */
 static constexpr const std::uint8_t MQTT_MAX_OUT_CONF_TOPIC_LENGTH =
-    MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_CONF) +
-    2U;  //!< Maximum length of the outbound configuration topic, for example `LSH/deviceName/conf`.
+    static_cast<std::uint8_t>(detail::MQTT_MAX_OUT_CONF_TOPIC_LENGTH_VALUE);
+/** @brief Maximum length of the outbound controller-backed events topic. */
 static constexpr const std::uint8_t MQTT_MAX_OUT_EVENTS_TOPIC_LENGTH =
-    MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_EVENTS) +
-    2U;  //!< Maximum length of the outbound controller-backed events topic, for example `LSH/deviceName/events`.
+    static_cast<std::uint8_t>(detail::MQTT_MAX_OUT_EVENTS_TOPIC_LENGTH_VALUE);
+/** @brief Maximum length of the outbound bridge-local topic, for example `LSH/deviceName/bridge`. */
 static constexpr const std::uint8_t MQTT_MAX_OUT_BRIDGE_TOPIC_LENGTH =
-    MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_BRIDGE) +
-    2U;  //!< Maximum length of the outbound bridge-local topic, for example `LSH/deviceName/bridge`.
-
-// Compile-time checks to ensure buffer sizes are sane.
-// If these assertions fail, the build will stop with a clear error message,
-// preventing runtime buffer overflows due to misconfiguration in platformio.ini.
-static_assert(MQTT_BASE_TOPIC_LENGTH > (std::char_traits<char>::length(MQTT_TOPIC_BASE) + virtualDevice::MAX_NAME_LENGTH),
-              "Derived MQTT base topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
-
-static_assert(
-    MQTT_MAX_IN_TOPIC_LENGTH > (MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_INPUT)),
-    "Derived MQTT input topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_INPUT, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
-
-static_assert(
-    MQTT_MAX_OUT_STATE_TOPIC_LENGTH > (MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_STATE)),
-    "Derived MQTT state topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_STATE, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
-
-static_assert(
-    MQTT_MAX_OUT_CONF_TOPIC_LENGTH > (MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_CONF)),
-    "Derived MQTT config topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_CONF, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
-
-static_assert(
-    MQTT_MAX_OUT_EVENTS_TOPIC_LENGTH > (MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_EVENTS)),
-    "Derived MQTT events topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_EVENTS, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
-
-static_assert(
-    MQTT_MAX_OUT_BRIDGE_TOPIC_LENGTH > (MQTT_BASE_TOPIC_LENGTH + std::char_traits<char>::length(MQTT_TOPIC_BRIDGE)),
-    "Derived MQTT bridge topic length overflowed uint8_t. Shorten CONFIG_MQTT_TOPIC_BRIDGE, CONFIG_MQTT_TOPIC_BASE or CONFIG_MAX_NAME_LENGTH.");
+    static_cast<std::uint8_t>(detail::MQTT_MAX_OUT_BRIDGE_TOPIC_LENGTH_VALUE);
 }  // namespace mqtt
 
 }  // namespace constants

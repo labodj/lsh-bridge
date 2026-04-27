@@ -29,7 +29,7 @@
 namespace
 {
 
-constexpr std::uint16_t BRIDGE_DIAGNOSTIC_DOC_SIZE = 192U;         //!< JsonDocument capacity used by every bridge-local diagnostic payload.
+constexpr std::uint16_t BRIDGE_DIAGNOSTIC_DOC_SIZE = 256U;         //!< JsonDocument capacity used by every bridge-local diagnostic payload.
 constexpr char BRIDGE_EVENT_KEY[] = "event";                       //!< Shared JSON key that stores the bridge event type.
 constexpr char DIAGNOSTIC_EVENT[] = "diagnostic";                  //!< Event name used by generic bridge diagnostic payloads.
 constexpr char SERVICE_PING_REPLY_EVENT[] = "service_ping_reply";  //!< Event name used by the bridge service-topic ping reply.
@@ -45,7 +45,13 @@ constexpr char REJECTED_OVERSIZE_COMMANDS_KEY[] =
 constexpr char REJECTED_FRAGMENTED_COMMANDS_KEY[] =
     "rejected_fragmented_commands";  //!< JSON key that reports fragmented commands rejected before enqueue.
 constexpr char REJECTED_MALFORMED_COMMANDS_KEY[] =
-    "rejected_malformed_commands";                                   //!< JSON key that reports malformed commands rejected during parse.
+    "rejected_malformed_commands";  //!< JSON key that reports malformed commands rejected during parse.
+constexpr char REJECTED_HOMIE_DESYNC_COMMANDS_KEY[] =
+    "rejected_homie_desync_commands";  //!< JSON key that reports Homie writes rejected while runtime state was stale.
+constexpr char REJECTED_HOMIE_INVALID_PAYLOAD_COMMANDS_KEY[] =
+    "rejected_homie_invalid_payload_commands";  //!< JSON key that reports Homie writes rejected for non-boolean payloads.
+constexpr char REJECTED_HOMIE_STAGE_FAILED_COMMANDS_KEY[] =
+    "rejected_homie_stage_failed_commands";                          //!< JSON key that reports Homie writes rejected by command staging.
 constexpr char CONTROLLER_CONNECTED_KEY[] = "controller_connected";  //!< JSON key that exposes current controller-link liveness.
 constexpr char RUNTIME_SYNCHRONIZED_KEY[] = "runtime_synchronized";  //!< JSON key that exposes bridge/runtime synchronization state.
 constexpr char BOOTSTRAP_PHASE_KEY[] = "bootstrap_phase";            //!< JSON key that names the current high-level bootstrap phase.
@@ -55,6 +61,8 @@ constexpr char MQTT_QUEUE_OVERFLOW_DIAGNOSTIC[] =
     "mqtt_queue_overflow";  //!< Diagnostic subtype used when the inbound MQTT queue overflowed.
 constexpr char MQTT_COMMAND_REJECTED_DIAGNOSTIC[] =
     "mqtt_command_rejected";  //!< Diagnostic subtype used when the bridge rejects MQTT commands before routing them into the live runtime.
+constexpr char HOMIE_COMMAND_REJECTED_DIAGNOSTIC[] =
+    "homie_command_rejected";  //!< Diagnostic subtype used when Homie writes are consumed locally but not staged for the controller.
 
 }  // namespace
 
@@ -70,6 +78,7 @@ namespace lsh::bridge::runtime
 void clearPendingBridgeDiagnostics(ControllerSerialLink &controllerSerialLink, MqttCommandQueue &mqttCommandQueue)
 {
     controllerSerialLink.clearPendingActuatorStormDiagnostic();
+    controllerSerialLink.clearRejectedHomieCounters();
     mqttCommandQueue.clearDroppedCounters();
     mqttCommandQueue.clearRejectedCounters();
 }
@@ -143,36 +152,65 @@ void publishPendingBridgeDiagnostics(ControllerSerialLink &controllerSerialLink,
     mqttCommandQueue.snapshotRejectedCounters(rejectedRetainedCommands, rejectedOversizeCommands, rejectedFragmentedCommands,
                                               rejectedMalformedCommands);
 
-    if (rejectedRetainedCommands == 0U && rejectedOversizeCommands == 0U && rejectedFragmentedCommands == 0U &&
-        rejectedMalformedCommands == 0U)
+    if (rejectedRetainedCommands > 0U || rejectedOversizeCommands > 0U || rejectedFragmentedCommands > 0U || rejectedMalformedCommands > 0U)
+    {
+        diagnosticDoc.clear();
+        diagnosticDoc[BRIDGE_EVENT_KEY] = DIAGNOSTIC_EVENT;
+        diagnosticDoc[BRIDGE_DIAGNOSTIC_KIND_KEY] = MQTT_COMMAND_REJECTED_DIAGNOSTIC;
+        if (rejectedRetainedCommands > 0U)
+        {
+            diagnosticDoc[REJECTED_RETAINED_COMMANDS_KEY] = rejectedRetainedCommands;
+        }
+        if (rejectedOversizeCommands > 0U)
+        {
+            diagnosticDoc[REJECTED_OVERSIZE_COMMANDS_KEY] = rejectedOversizeCommands;
+        }
+        if (rejectedFragmentedCommands > 0U)
+        {
+            diagnosticDoc[REJECTED_FRAGMENTED_COMMANDS_KEY] = rejectedFragmentedCommands;
+        }
+        if (rejectedMalformedCommands > 0U)
+        {
+            diagnosticDoc[REJECTED_MALFORMED_COMMANDS_KEY] = rejectedMalformedCommands;
+        }
+
+        if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, 1))
+        {
+            mqttCommandQueue.consumeRejectedCounters(rejectedRetainedCommands, rejectedOversizeCommands, rejectedFragmentedCommands,
+                                                     rejectedMalformedCommands);
+        }
+    }
+
+    std::uint16_t rejectedHomieDesyncCommands = 0U;
+    std::uint16_t rejectedHomieInvalidPayloadCommands = 0U;
+    std::uint16_t rejectedHomieStageFailedCommands = 0U;
+    controllerSerialLink.snapshotRejectedHomieCounters(rejectedHomieDesyncCommands, rejectedHomieInvalidPayloadCommands,
+                                                       rejectedHomieStageFailedCommands);
+    if (rejectedHomieDesyncCommands == 0U && rejectedHomieInvalidPayloadCommands == 0U && rejectedHomieStageFailedCommands == 0U)
     {
         return;
     }
 
     diagnosticDoc.clear();
     diagnosticDoc[BRIDGE_EVENT_KEY] = DIAGNOSTIC_EVENT;
-    diagnosticDoc[BRIDGE_DIAGNOSTIC_KIND_KEY] = MQTT_COMMAND_REJECTED_DIAGNOSTIC;
-    if (rejectedRetainedCommands > 0U)
+    diagnosticDoc[BRIDGE_DIAGNOSTIC_KIND_KEY] = HOMIE_COMMAND_REJECTED_DIAGNOSTIC;
+    if (rejectedHomieDesyncCommands > 0U)
     {
-        diagnosticDoc[REJECTED_RETAINED_COMMANDS_KEY] = rejectedRetainedCommands;
+        diagnosticDoc[REJECTED_HOMIE_DESYNC_COMMANDS_KEY] = rejectedHomieDesyncCommands;
     }
-    if (rejectedOversizeCommands > 0U)
+    if (rejectedHomieInvalidPayloadCommands > 0U)
     {
-        diagnosticDoc[REJECTED_OVERSIZE_COMMANDS_KEY] = rejectedOversizeCommands;
+        diagnosticDoc[REJECTED_HOMIE_INVALID_PAYLOAD_COMMANDS_KEY] = rejectedHomieInvalidPayloadCommands;
     }
-    if (rejectedFragmentedCommands > 0U)
+    if (rejectedHomieStageFailedCommands > 0U)
     {
-        diagnosticDoc[REJECTED_FRAGMENTED_COMMANDS_KEY] = rejectedFragmentedCommands;
-    }
-    if (rejectedMalformedCommands > 0U)
-    {
-        diagnosticDoc[REJECTED_MALFORMED_COMMANDS_KEY] = rejectedMalformedCommands;
+        diagnosticDoc[REJECTED_HOMIE_STAGE_FAILED_COMMANDS_KEY] = rejectedHomieStageFailedCommands;
     }
 
     if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, 1))
     {
-        mqttCommandQueue.consumeRejectedCounters(rejectedRetainedCommands, rejectedOversizeCommands, rejectedFragmentedCommands,
-                                                 rejectedMalformedCommands);
+        controllerSerialLink.consumeRejectedHomieCounters(rejectedHomieDesyncCommands, rejectedHomieInvalidPayloadCommands,
+                                                          rejectedHomieStageFailedCommands);
     }
 }
 

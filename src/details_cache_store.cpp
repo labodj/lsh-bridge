@@ -32,46 +32,34 @@
 
 namespace
 {
-constexpr char kCacheNamespace[] = "lsh-bridge";   //!< Single NVS namespace reserved for the controller topology cache.
-constexpr char kCacheRecordKey[] = "details";      //!< Single NVS key that holds the full serialized topology record.
-constexpr std::uint16_t kCacheRecordVersion = 1U;  //!< Version of the serialized cache format stored in NVS.
+constexpr char kCacheNamespace[] = "lsh-bridge";  //!< Single NVS namespace reserved for the controller topology cache.
+constexpr char kCacheRecordKey[] = "details";     //!< Single NVS key that holds the full serialized topology record.
+constexpr std::uint8_t kCacheRecordVersion = 2U;  //!< Version of the byte-stable serialized cache format stored in NVS.
+constexpr std::uint8_t kCacheRecordMagic[] = {'L', 'S', 'H', 'D'};
+constexpr std::size_t kCacheHeaderSize = sizeof(kCacheRecordMagic) + 4U;  // magic + version + name_len + actuator_count + button_count
+constexpr std::size_t kCacheChecksumSize = sizeof(std::uint32_t);
+constexpr std::size_t kCacheMinimumRecordSize = kCacheHeaderSize + kCacheChecksumSize;
+constexpr std::size_t kCacheMaximumRecordSize = kCacheHeaderSize + constants::virtualDevice::MAX_NAME_LENGTH +
+                                                constants::virtualDevice::MAX_ACTUATORS + constants::virtualDevice::MAX_BUTTONS +
+                                                kCacheChecksumSize;
 
 /**
- * @brief Flat record stored as one NVS blob.
- * @details The bridge writes one blob per topology change. Using a single record
- *          keeps the code straightforward, keeps writes infrequent, and avoids
- *          partially updated multi-key state after resets.
- */
-struct StoredDetailsRecord
-{
-    std::uint16_t version = kCacheRecordVersion;
-    std::uint8_t nameLength = 0U;
-    std::uint8_t actuatorCount = 0U;
-    std::uint8_t buttonCount = 0U;
-    char name[constants::virtualDevice::MAX_NAME_LENGTH + 1U]{};
-    std::uint8_t actuatorIds[constants::virtualDevice::MAX_ACTUATORS]{};
-    std::uint8_t buttonIds[constants::virtualDevice::MAX_BUTTONS]{};
-    std::uint32_t checksum = 0U;
-};
-
-/**
- * @brief Computes a tiny deterministic checksum over the serialized cache record.
+ * @brief Computes a tiny deterministic checksum over serialized cache bytes.
  * @details The record is trusted only after checksum verification. This is not
  *          meant to protect against malicious tampering; it simply rejects torn
  *          or corrupted NVS contents before they reach the runtime model.
  *
- * @param record flat serialized cache record, excluding any external metadata.
- * @return std::uint32_t deterministic checksum over every byte that precedes
- *         the `checksum` field inside `record`.
+ * @param bytes serialized record bytes excluding the trailing checksum.
+ * @param length number of bytes to include in the checksum.
+ * @return std::uint32_t deterministic checksum over the byte range.
  */
-[[nodiscard]] auto computeRecordChecksum(const StoredDetailsRecord &record) -> std::uint32_t
+[[nodiscard]] auto computeRecordChecksum(const std::uint8_t *bytes, std::size_t length) -> std::uint32_t
 {
     constexpr std::uint32_t offsetBasis = 2166136261U;
     constexpr std::uint32_t prime = 16777619U;
 
     std::uint32_t checksum = offsetBasis;
-    const auto *bytes = reinterpret_cast<const std::uint8_t *>(&record);
-    for (std::size_t index = 0U; index < offsetof(StoredDetailsRecord, checksum); ++index)
+    for (std::size_t index = 0U; index < length; ++index)
     {
         checksum ^= bytes[index];
         checksum *= prime;
@@ -81,19 +69,67 @@ struct StoredDetailsRecord
 }
 
 /**
- * @brief Validates that an ID list contains only unique positive IDs.
- *
- * @param ids fixed-size array that stores the serialized IDs.
- * @param count how many entries inside `ids` are logically used.
- * @return true if the logical prefix `[0, count)` contains only unique IDs
- *         greater than zero.
- * @return false if `count` exceeds the buffer capacity or if the logical prefix
- *         contains zero/duplicate IDs.
+ * @brief Append one byte to a bounded serialized record buffer.
  */
-template <std::size_t Capacity>
-[[nodiscard]] auto validatePositiveUniqueIds(const std::uint8_t (&ids)[Capacity], std::uint8_t count) -> bool
+[[nodiscard]] auto appendByte(std::uint8_t *record, std::size_t capacity, std::size_t &offset, std::uint8_t value) -> bool
 {
-    if (count > Capacity)
+    if (record == nullptr || offset >= capacity)
+    {
+        return false;
+    }
+
+    record[offset] = value;
+    ++offset;
+    return true;
+}
+
+/**
+ * @brief Append a byte range to a bounded serialized record buffer.
+ */
+[[nodiscard]] auto
+appendBytes(std::uint8_t *record, std::size_t capacity, std::size_t &offset, const std::uint8_t *source, std::size_t sourceLength) -> bool
+{
+    if (sourceLength == 0U)
+    {
+        return true;
+    }
+
+    if (record == nullptr || source == nullptr || offset > capacity || sourceLength > (capacity - offset))
+    {
+        return false;
+    }
+
+    std::memcpy(record + offset, source, sourceLength);
+    offset += sourceLength;
+    return true;
+}
+
+/**
+ * @brief Append one little-endian uint32 to a bounded serialized record buffer.
+ */
+[[nodiscard]] auto appendUint32Le(std::uint8_t *record, std::size_t capacity, std::size_t &offset, std::uint32_t value) -> bool
+{
+    return appendByte(record, capacity, offset, static_cast<std::uint8_t>(value & 0xFFU)) &&
+           appendByte(record, capacity, offset, static_cast<std::uint8_t>((value >> 8U) & 0xFFU)) &&
+           appendByte(record, capacity, offset, static_cast<std::uint8_t>((value >> 16U) & 0xFFU)) &&
+           appendByte(record, capacity, offset, static_cast<std::uint8_t>((value >> 24U) & 0xFFU));
+}
+
+/**
+ * @brief Read one little-endian uint32 from the serialized record tail.
+ */
+[[nodiscard]] auto readUint32Le(const std::uint8_t *bytes) -> std::uint32_t
+{
+    return static_cast<std::uint32_t>(bytes[0]) | (static_cast<std::uint32_t>(bytes[1]) << 8U) |
+           (static_cast<std::uint32_t>(bytes[2]) << 16U) | (static_cast<std::uint32_t>(bytes[3]) << 24U);
+}
+
+/**
+ * @brief Validate that a serialized ID list contains only unique positive IDs.
+ */
+[[nodiscard]] auto validatePositiveUniqueIds(const std::uint8_t *ids, std::uint8_t count) -> bool
+{
+    if (ids == nullptr && count != 0U)
     {
         return false;
     }
@@ -114,41 +150,96 @@ template <std::size_t Capacity>
 }
 
 /**
- * @brief Validates one deserialized cache record before exposing it to runtime.
- *
- * @param record flat cache record loaded from NVS.
- * @return true if version, lengths, checksum and ID lists all look sane.
- * @return false if the NVS record looks torn, stale, corrupted or structurally invalid.
+ * @brief Validate that an ETL ID vector contains only unique positive IDs.
  */
-[[nodiscard]] auto validateStoredRecord(const StoredDetailsRecord &record) -> bool
+template <typename TIdVector> [[nodiscard]] auto validatePositiveUniqueIds(const TIdVector &ids) -> bool
 {
-    if (record.version != kCacheRecordVersion)
+    etl::bitset<256U> seenIds;
+    for (const std::uint8_t id : ids)
+    {
+        if (id == 0U || seenIds.test(id))
+        {
+            return false;
+        }
+
+        seenIds.set(id);
+    }
+
+    return true;
+}
+
+/**
+ * @brief Decode a byte-stable NVS cache record into a topology snapshot.
+ * @details Format v2 is deliberately independent from C++ object layout:
+ *          magic[4], version, name_len, actuator_count, button_count, raw name
+ *          bytes, actuator IDs, button IDs, little-endian FNV checksum. There is
+ *          no padding, no null terminator on flash, and no compiler ABI coupling.
+ */
+[[nodiscard]] auto decodeStoredRecord(const std::uint8_t *record, std::size_t recordLength, DeviceDetailsSnapshot &outDetails) -> bool
+{
+    outDetails.clear();
+
+    if (record == nullptr || recordLength < kCacheMinimumRecordSize || recordLength > kCacheMaximumRecordSize)
     {
         return false;
     }
 
-    if (record.nameLength == 0U || record.nameLength > constants::virtualDevice::MAX_NAME_LENGTH)
+    std::size_t offset = 0U;
+    if (std::memcmp(record, kCacheRecordMagic, sizeof(kCacheRecordMagic)) != 0)
+    {
+        return false;
+    }
+    offset += sizeof(kCacheRecordMagic);
+
+    const std::uint8_t version = record[offset++];
+    const std::uint8_t nameLength = record[offset++];
+    const std::uint8_t actuatorCount = record[offset++];
+    const std::uint8_t buttonCount = record[offset++];
+
+    if (version != kCacheRecordVersion || nameLength == 0U || nameLength > constants::virtualDevice::MAX_NAME_LENGTH ||
+        actuatorCount > constants::virtualDevice::MAX_ACTUATORS || buttonCount > constants::virtualDevice::MAX_BUTTONS)
     {
         return false;
     }
 
-    if (record.name[record.nameLength] != '\0')
+    const std::size_t expectedLength =
+        kCacheHeaderSize + nameLength + static_cast<std::size_t>(actuatorCount) + buttonCount + kCacheChecksumSize;
+    if (recordLength != expectedLength)
     {
         return false;
     }
 
-    if (record.actuatorCount > constants::virtualDevice::MAX_ACTUATORS || record.buttonCount > constants::virtualDevice::MAX_BUTTONS)
+    const std::uint32_t storedChecksum = readUint32Le(record + recordLength - kCacheChecksumSize);
+    if (storedChecksum != computeRecordChecksum(record, recordLength - kCacheChecksumSize))
     {
         return false;
     }
 
-    if (!validatePositiveUniqueIds(record.actuatorIds, record.actuatorCount) ||
-        !validatePositiveUniqueIds(record.buttonIds, record.buttonCount))
+    char nameBuffer[constants::virtualDevice::MAX_NAME_LENGTH + 1U]{};
+    std::memcpy(nameBuffer, record + offset, nameLength);
+    offset += nameLength;
+
+    const std::uint8_t *const actuatorIds = record + offset;
+    offset += actuatorCount;
+    const std::uint8_t *const buttonIds = record + offset;
+
+    if (!validatePositiveUniqueIds(actuatorIds, actuatorCount) || !validatePositiveUniqueIds(buttonIds, buttonCount))
     {
         return false;
     }
 
-    return record.checksum == computeRecordChecksum(record);
+    outDetails.name.assign(nameBuffer);
+    for (std::uint8_t index = 0U; index < actuatorCount; ++index)
+    {
+        outDetails.actuatorIds.push_back(actuatorIds[index]);
+    }
+
+    for (std::uint8_t index = 0U; index < buttonCount; ++index)
+    {
+        outDetails.buttonIds.push_back(buttonIds[index]);
+    }
+
+    return true;
 }
 }  // namespace
 
@@ -177,33 +268,22 @@ auto load(DeviceDetailsSnapshot &outDetails) -> bool
     }
 
     const std::size_t recordLength = preferences.getBytesLength(kCacheRecordKey);
-    if (recordLength != sizeof(StoredDetailsRecord))
+    if (recordLength < kCacheMinimumRecordSize || recordLength > kCacheMaximumRecordSize)
     {
         preferences.end();
         return false;
     }
 
-    StoredDetailsRecord record{};
-    const std::size_t bytesRead = preferences.getBytes(kCacheRecordKey, &record, sizeof(record));
+    std::uint8_t record[kCacheMaximumRecordSize]{};
+    const std::size_t bytesRead = preferences.getBytes(kCacheRecordKey, record, recordLength);
     preferences.end();
 
-    if (bytesRead != sizeof(record) || !validateStoredRecord(record))
+    if (bytesRead != recordLength)
     {
         return false;
     }
 
-    outDetails.name.assign(record.name);
-    for (std::uint8_t index = 0U; index < record.actuatorCount; ++index)
-    {
-        outDetails.actuatorIds.push_back(record.actuatorIds[index]);
-    }
-
-    for (std::uint8_t index = 0U; index < record.buttonCount; ++index)
-    {
-        outDetails.buttonIds.push_back(record.buttonIds[index]);
-    }
-
-    return true;
+    return decodeStoredRecord(record, bytesRead, outDetails);
 }
 
 /**
@@ -225,31 +305,47 @@ auto save(const DeviceDetailsSnapshot &details) -> bool
         return false;
     }
 
-    StoredDetailsRecord record{};
-    record.version = kCacheRecordVersion;
-    record.nameLength = static_cast<std::uint8_t>(details.name.size());
-    record.actuatorCount = static_cast<std::uint8_t>(details.actuatorIds.size());
-    record.buttonCount = static_cast<std::uint8_t>(details.buttonIds.size());
-    std::memcpy(record.name, details.name.c_str(), details.name.size());
-    record.name[details.name.size()] = '\0';
-
-    for (std::uint8_t index = 0U; index < record.actuatorCount; ++index)
-    {
-        record.actuatorIds[index] = details.actuatorIds[index];
-    }
-
-    for (std::uint8_t index = 0U; index < record.buttonCount; ++index)
-    {
-        record.buttonIds[index] = details.buttonIds[index];
-    }
-
-    if (!validatePositiveUniqueIds(record.actuatorIds, record.actuatorCount) ||
-        !validatePositiveUniqueIds(record.buttonIds, record.buttonCount))
+    if (!validatePositiveUniqueIds(details.actuatorIds) || !validatePositiveUniqueIds(details.buttonIds))
     {
         return false;
     }
 
-    record.checksum = computeRecordChecksum(record);
+    std::uint8_t record[kCacheMaximumRecordSize]{};
+    std::size_t recordLength = 0U;
+    const auto nameLength = static_cast<std::uint8_t>(details.name.size());
+    const auto actuatorCount = static_cast<std::uint8_t>(details.actuatorIds.size());
+    const auto buttonCount = static_cast<std::uint8_t>(details.buttonIds.size());
+
+    if (!appendBytes(record, sizeof(record), recordLength, kCacheRecordMagic, sizeof(kCacheRecordMagic)) ||
+        !appendByte(record, sizeof(record), recordLength, kCacheRecordVersion) ||
+        !appendByte(record, sizeof(record), recordLength, nameLength) || !appendByte(record, sizeof(record), recordLength, actuatorCount) ||
+        !appendByte(record, sizeof(record), recordLength, buttonCount) ||
+        !appendBytes(record, sizeof(record), recordLength, reinterpret_cast<const std::uint8_t *>(details.name.c_str()), nameLength))
+    {
+        return false;
+    }
+
+    for (const std::uint8_t actuatorId : details.actuatorIds)
+    {
+        if (!appendByte(record, sizeof(record), recordLength, actuatorId))
+        {
+            return false;
+        }
+    }
+
+    for (const std::uint8_t buttonId : details.buttonIds)
+    {
+        if (!appendByte(record, sizeof(record), recordLength, buttonId))
+        {
+            return false;
+        }
+    }
+
+    const std::uint32_t checksum = computeRecordChecksum(record, recordLength);
+    if (!appendUint32Le(record, sizeof(record), recordLength, checksum))
+    {
+        return false;
+    }
 
     Preferences preferences;
     if (!preferences.begin(kCacheNamespace, false))
@@ -257,10 +353,10 @@ auto save(const DeviceDetailsSnapshot &details) -> bool
         return false;
     }
 
-    const std::size_t bytesWritten = preferences.putBytes(kCacheRecordKey, &record, sizeof(record));
+    const std::size_t bytesWritten = preferences.putBytes(kCacheRecordKey, record, recordLength);
     preferences.end();
 
-    return bytesWritten == sizeof(record);
+    return bytesWritten == recordLength;
 }
 
 /**

@@ -34,9 +34,11 @@ etl::string<constants::mqtt::MQTT_MAX_OUT_EVENTS_TOPIC_LENGTH> mqttOutEventsTopi
 etl::string<constants::mqtt::MQTT_MAX_OUT_BRIDGE_TOPIC_LENGTH> mqttOutBridgeTopic{};  //!< MQTT output bridge-local runtime topic
 
 /**
- * @brief Builds MQTT topics.
+ * @brief Build the device-scoped MQTT topic set.
  *
- * Eg: LSH/deviceName/InTopic, LSH/deviceName/OutTopic
+ * Examples: `LSH/deviceName/IN`, `LSH/deviceName/state`,
+ * `LSH/deviceName/conf`, `LSH/deviceName/events` and
+ * `LSH/deviceName/bridge`.
  *
  * @param deviceName name of the attached device.
  */

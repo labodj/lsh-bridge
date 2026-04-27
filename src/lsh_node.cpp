@@ -35,11 +35,8 @@
  *          so a short coalescing window can emit a single SET_STATE toward the controller.
  * @param range The HomieRange object (not used here).
  * @param value The message payload, expected to be "true" or "false".
- * @return true always, to indicate the event has been handled and should not be
- *         propagated to other handlers. Returning false would pass it to the
- *         global handler.
  */
-auto LSHNode::handleSetCommand(const HomieRange &range, const String &value) -> bool
+void LSHNode::handleSetCommand(const HomieRange &range, const String &value)
 {
     DP_CONTEXT();
     DPL("↑ ID: ", this->actuatorId, " | value: ", value.c_str());
@@ -53,25 +50,28 @@ auto LSHNode::handleSetCommand(const HomieRange &range, const String &value) -> 
     // the baseline; raw LSH writes are handled separately by the MQTT input path.
     if (!this->virtualDevice.isRuntimeSynchronized())
     {
+        this->controllerSerialLink.recordRejectedHomieCommand(ControllerSerialLink::HomieRejectedCommandReason::RuntimeDesynchronized);
         DPL("Bridge model is waiting for a fresh state sync. Ignoring command.");
-        return true;
+        return;
     }
 
-    // If value is not "true" or "false" then it's not valid, don't propagate the callback
+    // The lambda in the constructor always consumes this Homie callback. Invalid
+    // values are ignored here so they cannot reach the controller as ambiguous state.
     if ((value != BOOL_TRUE_LITERAL) && (value != BOOL_FALSE_LITERAL))
     {
-        return true;
+        this->controllerSerialLink.recordRejectedHomieCommand(ControllerSerialLink::HomieRejectedCommandReason::InvalidPayload);
+        return;
     }
 
     const bool newState = (value == BOOL_TRUE_LITERAL);  // New state
     if (!this->controllerSerialLink.stageSingleActuatorCommand(this->actuatorId, newState))
     {
+        this->controllerSerialLink.recordRejectedHomieCommand(ControllerSerialLink::HomieRejectedCommandReason::StageFailed);
         DPL("Failed to stage desired actuator state for this Homie node.");
-        return true;
+        return;
     }
 
     Homie.getLogger() << "Command sent to turn light " << (newState ? "on" : "off") << endl;
-    return true;
 }
 
 /**

@@ -62,11 +62,73 @@ struct ValidatedNetworkClickPayload
 using DesiredActuatorStateBitset = ControllerSerialLink::DesiredActuatorStateBitset;
 
 /**
- * @brief Lookup table used to unpack one packed state byte into 8 boolean actuator states.
- * @details Keeping the masks in a table makes the unpacking loop easy to read and
- *          avoids repeated shift operations on smaller microcontrollers.
+ * @brief Return the bit mask used to unpack one packed state bit.
  */
-constexpr std::uint8_t kPackedBitMask[8] = {0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U};
+[[nodiscard]] constexpr auto packedBitMask(std::uint8_t bitIndex) -> std::uint8_t
+{
+    return static_cast<std::uint8_t>(1U << bitIndex);
+}
+
+/**
+ * @brief Return the number of bytes used by one packed state payload.
+ */
+[[nodiscard]] constexpr auto packedStateByteCount(std::uint8_t totalActuators) -> std::uint8_t
+{
+    return static_cast<std::uint8_t>((static_cast<std::size_t>(totalActuators) + 7U) / 8U);
+}
+
+/**
+ * @brief Return the bit mask that is allowed in the final packed state byte.
+ * @details When the actuator count is not a multiple of eight, the unused tail
+ *          bits must stay zero. Rejecting non-zero padding prevents stale or
+ *          malformed intent from hiding in bits the controller will ignore.
+ */
+[[nodiscard]] constexpr auto lastPackedStateByteMask(std::uint8_t totalActuators) -> std::uint8_t
+{
+    const std::uint8_t liveTailBits = static_cast<std::uint8_t>(totalActuators & 0x07U);
+    if (liveTailBits == 0U)
+    {
+        return 0xFFU;
+    }
+    return static_cast<std::uint8_t>((1U << liveTailBits) - 1U);
+}
+
+/**
+ * @brief Validate that one packed byte does not set ignored tail bits.
+ */
+[[nodiscard]] constexpr auto
+packedStateByteHasValidTail(std::uint8_t packedByte, std::uint8_t byteIndex, std::uint8_t byteCount, std::uint8_t totalActuators) -> bool
+{
+    if (byteCount == 0U || byteIndex != static_cast<std::uint8_t>(byteCount - 1U))
+    {
+        return true;
+    }
+    return (packedByte & static_cast<std::uint8_t>(~lastPackedStateByteMask(totalActuators))) == 0U;
+}
+
+/**
+ * @brief Increment one diagnostic counter without wrapping.
+ */
+void incrementDiagnosticCounter(std::uint16_t &counter) noexcept
+{
+    constexpr std::uint16_t diagnosticCounterMax = 0xFFFFU;
+    if (counter < diagnosticCounterMax)
+    {
+        ++counter;
+    }
+}
+
+/**
+ * @brief Return one packed state byte from a dense state bitset.
+ */
+template <typename TBitset>
+[[nodiscard]] auto packedStateByteFromBits(const TBitset &stateBits, std::uint8_t byteIndex, std::uint8_t totalActuators) -> std::uint8_t
+{
+    const std::size_t bitOffset = static_cast<std::size_t>(byteIndex) * 8U;
+    const std::size_t remainingBits = static_cast<std::size_t>(totalActuators) - bitOffset;
+    const std::size_t extractedBits = remainingBits < 8U ? remainingBits : 8U;
+    return stateBits.template extract<std::uint8_t>(bitOffset, extractedBits);
+}
 
 /**
  * @brief Append one packed state snapshot to a JSON array in protocol wire order.
@@ -76,17 +138,80 @@ constexpr std::uint8_t kPackedBitMask[8] = {0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0
  */
 template <typename TBitset> void appendPackedStateBytes(const TBitset &stateBits, std::uint8_t totalActuators, JsonArray packedStates)
 {
-    const std::uint8_t byteCount = static_cast<std::uint8_t>((static_cast<std::size_t>(totalActuators) + 7U) / 8U);
+    const std::uint8_t byteCount = packedStateByteCount(totalActuators);
     for (std::uint8_t byteIndex = 0U; byteIndex < byteCount; ++byteIndex)
     {
-        const std::size_t bitOffset = static_cast<std::size_t>(byteIndex) * 8U;
-        const std::size_t remainingBits = static_cast<std::size_t>(totalActuators) - bitOffset;
-        const std::size_t extractedBits = remainingBits < 8U ? remainingBits : 8U;
-        // The last packed byte may expose fewer than 8 live actuator bits, so
-        // `extract()` is explicitly bounded to the valid tail length.
-        packedStates.add(stateBits.template extract<std::uint8_t>(bitOffset, extractedBits));
+        packedStates.add(packedStateByteFromBits(stateBits, byteIndex, totalActuators));
     }
 }
+
+/**
+ * @brief Write a string literal without its terminating null byte.
+ */
+template <typename Writer, std::size_t Length> void writeAsciiLiteral(Writer &writer, const char (&literal)[Length])
+{
+    static_assert(Length > 0U);
+    (void)writer.write(reinterpret_cast<const std::uint8_t *>(literal), Length - 1U);
+}
+
+/**
+ * @brief Write one uint8 value as decimal ASCII without pulling in printf.
+ */
+template <typename Writer> void writeUint8Decimal(Writer &writer, std::uint8_t value)
+{
+    char digits[3]{};
+    std::uint8_t length = 0U;
+    if (value >= 100U)
+    {
+        digits[length++] = static_cast<char>('0' + (value / 100U));
+        value %= 100U;
+        digits[length++] = static_cast<char>('0' + (value / 10U));
+        digits[length++] = static_cast<char>('0' + (value % 10U));
+    }
+    else if (value >= 10U)
+    {
+        digits[length++] = static_cast<char>('0' + (value / 10U));
+        digits[length++] = static_cast<char>('0' + (value % 10U));
+    }
+    else
+    {
+        digits[length++] = static_cast<char>('0' + value);
+    }
+
+    (void)writer.write(reinterpret_cast<const std::uint8_t *>(digits), length);
+}
+
+#ifdef CONFIG_MSG_PACK_ARDUINO
+/**
+ * @brief Write one uint8 using the shortest canonical MsgPack unsigned form.
+ */
+template <typename Writer> void writeMsgPackUint8(Writer &writer, std::uint8_t value)
+{
+    if (value <= 0x7FU)
+    {
+        (void)writer.write(value);
+        return;
+    }
+
+    const std::uint8_t bytes[] = {0xCCU, value};
+    (void)writer.write(bytes, sizeof(bytes));
+}
+
+/**
+ * @brief Write a MsgPack array header for the packed state byte array.
+ */
+template <typename Writer> void writeMsgPackArrayPrefix(Writer &writer, std::uint8_t elementCount)
+{
+    if (elementCount <= 15U)
+    {
+        (void)writer.write(static_cast<std::uint8_t>(0x90U | elementCount));
+        return;
+    }
+
+    const std::uint8_t bytes[] = {0xDCU, 0x00U, elementCount};
+    (void)writer.write(bytes, sizeof(bytes));
+}
+#endif
 
 /**
  * @brief Decode one packed desired-state payload into the bridge-side desired shadow form.
@@ -99,8 +224,15 @@ template <typename TBitset> void appendPackedStateBytes(const TBitset &stateBits
  */
 auto decodeDesiredPackedState(const JsonArrayConst &packedBytes, std::uint8_t totalActuators, DesiredActuatorStateBitset &outState) -> bool
 {
+    const std::uint8_t expectedByteCount = packedStateByteCount(totalActuators);
+    if (packedBytes.size() != expectedByteCount)
+    {
+        return false;
+    }
+
     outState.reset();
     std::uint8_t actuatorIndex = 0U;
+    std::uint8_t byteIndex = 0U;
 
     for (const JsonVariantConst packedByteVariant : packedBytes)
     {
@@ -111,9 +243,51 @@ auto decodeDesiredPackedState(const JsonArrayConst &packedBytes, std::uint8_t to
             return false;
         }
 
+        if (!packedStateByteHasValidTail(packedByte, byteIndex, expectedByteCount, totalActuators))
+        {
+            outState.reset();
+            return false;
+        }
+
         for (std::uint8_t bitIndex = 0U; bitIndex < 8U && actuatorIndex < totalActuators; ++bitIndex)
         {
-            outState.set(actuatorIndex, (packedByte & kPackedBitMask[bitIndex]) != 0U);
+            outState.set(actuatorIndex, (packedByte & packedBitMask(bitIndex)) != 0U);
+            ++actuatorIndex;
+        }
+        ++byteIndex;
+    }
+
+    return true;
+}
+
+/**
+ * @brief Decode already-materialized packed desired-state bytes.
+ */
+auto decodeDesiredPackedStateBytes(const std::uint8_t *packedBytes,
+                                   std::uint8_t packedByteCount,
+                                   std::uint8_t totalActuators,
+                                   DesiredActuatorStateBitset &outState) -> bool
+{
+    const std::uint8_t expectedByteCount = packedStateByteCount(totalActuators);
+    if (packedBytes == nullptr || packedByteCount != expectedByteCount)
+    {
+        return false;
+    }
+
+    outState.reset();
+    std::uint8_t actuatorIndex = 0U;
+    for (std::uint8_t byteIndex = 0U; byteIndex < packedByteCount; ++byteIndex)
+    {
+        const std::uint8_t packedByte = packedBytes[byteIndex];
+        if (!packedStateByteHasValidTail(packedByte, byteIndex, expectedByteCount, totalActuators))
+        {
+            outState.reset();
+            return false;
+        }
+
+        for (std::uint8_t bitIndex = 0U; bitIndex < 8U && actuatorIndex < totalActuators; ++bitIndex)
+        {
+            outState.set(actuatorIndex, (packedByte & packedBitMask(bitIndex)) != 0U);
             ++actuatorIndex;
         }
     }
@@ -258,14 +432,15 @@ auto decodeReceivedPackedState(const JsonDocument &receivedDoc, std::uint8_t tot
         return DeserializeExitCode::ERR_MISSING_KEY_STATE;
     }
 
-    const std::size_t expectedBytes = (static_cast<std::size_t>(totalActuators) + 7U) / 8U;
-    if (packedBytes.size() != expectedBytes)
+    const std::uint8_t expectedByteCount = packedStateByteCount(totalActuators);
+    if (packedBytes.size() != expectedByteCount)
     {
         return DeserializeExitCode::ERR_ACTUATORS_MISMATCH;
     }
 
     ActuatorStateBitset decodedState{};
     std::uint8_t actuatorIndex = 0U;
+    std::uint8_t byteIndex = 0U;
     for (const JsonVariantConst packedByteVariant : packedBytes)
     {
         std::uint8_t validatedPackedByte = 0U;
@@ -274,11 +449,17 @@ auto decodeReceivedPackedState(const JsonDocument &receivedDoc, std::uint8_t tot
             return DeserializeExitCode::ERR_STATE_VALUE_IMPLAUSIBLE;
         }
 
+        if (!packedStateByteHasValidTail(validatedPackedByte, byteIndex, expectedByteCount, totalActuators))
+        {
+            return DeserializeExitCode::ERR_STATE_VALUE_IMPLAUSIBLE;
+        }
+
         for (std::uint8_t bitIndex = 0U; bitIndex < 8U && actuatorIndex < totalActuators; ++bitIndex)
         {
-            decodedState[actuatorIndex] = (validatedPackedByte & kPackedBitMask[bitIndex]) != 0U;
+            decodedState.set(actuatorIndex, (validatedPackedByte & packedBitMask(bitIndex)) != 0U);
             ++actuatorIndex;
         }
+        ++byteIndex;
     }
 
     outState = decodedState;
@@ -415,7 +596,7 @@ auto ControllerSerialLink::sendJson(constants::payloads::StaticType payloadType)
 }
 
 /**
- * @brief Sends a JsonDocument via Serial.
+ * @brief Serialize and send one ArduinoJson document over the controller link.
  * @details The active wire codec is selected at build time. JSON builds
  *          serialize newline-delimited text frames, while MsgPack builds emit
  *          the compact binary representation through the framed serial
@@ -429,7 +610,7 @@ auto ControllerSerialLink::sendJson(constants::payloads::StaticType payloadType)
 auto ControllerSerialLink::sendJson(const JsonDocument &json) -> bool
 {
     DP_CONTEXT();
-    DP("↑ Json to send: ");
+    DP("↑ Document to send: ");
     DPJ(json);
 #ifdef CONFIG_MSG_PACK_ARDUINO
     MsgPackFrameWriter framedWriter(*this->serial);
@@ -494,6 +675,124 @@ auto ControllerSerialLink::sendJson(const char *buffer, size_t length) -> bool
 }
 
 /**
+ * @brief Send one coalesced `SET_STATE` command without building a JsonDocument.
+ * @details The shape is fixed by the LSH wire protocol, so this path writes the
+ *          exact JSON or MsgPack bytes for `{"p":12,"s":[...]}` directly to
+ *          the active serial transport.
+ */
+auto ControllerSerialLink::sendSetStateCommand(const DesiredActuatorStateBitset &desiredSnapshot, std::uint8_t totalActuators) -> bool
+{
+    DP_CONTEXT();
+    using namespace lsh::bridge::protocol;
+
+    const std::uint8_t byteCount = packedStateByteCount(totalActuators);
+#ifdef CONFIG_MSG_PACK_ARDUINO
+    MsgPackFrameWriter framedWriter(*this->serial);
+    if (!framedWriter.beginFrame())
+    {
+        return false;
+    }
+
+    lsh::bridge::communication::CheckedWriter<Print> checkedWriter(framedWriter);
+    (void)checkedWriter.write(static_cast<std::uint8_t>(0x82U));  // fixmap, 2 key/value pairs
+    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
+    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_PAYLOAD[0]));
+    writeMsgPackUint8(checkedWriter, static_cast<std::uint8_t>(Command::SET_STATE));
+    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
+    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_STATE[0]));
+    writeMsgPackArrayPrefix(checkedWriter, byteCount);
+    for (std::uint8_t byteIndex = 0U; byteIndex < byteCount; ++byteIndex)
+    {
+        writeMsgPackUint8(checkedWriter, packedStateByteFromBits(desiredSnapshot, byteIndex, totalActuators));
+    }
+
+    const bool frameEnded = framedWriter.endFrame();
+    if (checkedWriter.failed() || !frameEnded)
+    {
+        return false;
+    }
+#else
+    lsh::bridge::communication::CheckedWriter<Print> checkedWriter(*this->serial);
+    writeAsciiLiteral(checkedWriter, "{\"p\":12,\"s\":[");
+    for (std::uint8_t byteIndex = 0U; byteIndex < byteCount; ++byteIndex)
+    {
+        if (byteIndex != 0U)
+        {
+            (void)checkedWriter.write(static_cast<std::uint8_t>(','));
+        }
+        writeUint8Decimal(checkedWriter, packedStateByteFromBits(desiredSnapshot, byteIndex, totalActuators));
+    }
+    writeAsciiLiteral(checkedWriter, "]}\n");
+    if (checkedWriter.failed())
+    {
+        return false;
+    }
+#endif
+
+    this->updateLastSentTime();
+    return true;
+}
+
+/**
+ * @brief Send one fixed-shape click command without building a JsonDocument.
+ */
+auto ControllerSerialLink::sendClickCommand(lsh::bridge::protocol::Command command,
+                                            std::uint8_t clickType,
+                                            std::uint8_t clickableId,
+                                            std::uint8_t correlationId) -> bool
+{
+    DP_CONTEXT();
+    using namespace lsh::bridge::protocol;
+
+#ifdef CONFIG_MSG_PACK_ARDUINO
+    MsgPackFrameWriter framedWriter(*this->serial);
+    if (!framedWriter.beginFrame())
+    {
+        return false;
+    }
+
+    lsh::bridge::communication::CheckedWriter<Print> checkedWriter(framedWriter);
+    (void)checkedWriter.write(static_cast<std::uint8_t>(0x84U));  // fixmap, 4 key/value pairs
+    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
+    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_PAYLOAD[0]));
+    writeMsgPackUint8(checkedWriter, static_cast<std::uint8_t>(command));
+    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
+    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_TYPE[0]));
+    writeMsgPackUint8(checkedWriter, clickType);
+    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
+    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_ID[0]));
+    writeMsgPackUint8(checkedWriter, clickableId);
+    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
+    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_CORRELATION_ID[0]));
+    writeMsgPackUint8(checkedWriter, correlationId);
+
+    const bool frameEnded = framedWriter.endFrame();
+    if (checkedWriter.failed() || !frameEnded)
+    {
+        return false;
+    }
+#else
+    lsh::bridge::communication::CheckedWriter<Print> checkedWriter(*this->serial);
+    writeAsciiLiteral(checkedWriter, "{\"p\":");
+    writeUint8Decimal(checkedWriter, static_cast<std::uint8_t>(command));
+    writeAsciiLiteral(checkedWriter, ",\"t\":");
+    writeUint8Decimal(checkedWriter, clickType);
+    writeAsciiLiteral(checkedWriter, ",\"i\":");
+    writeUint8Decimal(checkedWriter, clickableId);
+    writeAsciiLiteral(checkedWriter, ",\"c\":");
+    writeUint8Decimal(checkedWriter, correlationId);
+    writeAsciiLiteral(checkedWriter, "}\n");
+    if (checkedWriter.failed())
+    {
+        return false;
+    }
+#endif
+
+    this->updateLastSentTime();
+    return true;
+}
+
+/**
  * @brief Copy the last controller-confirmed state into the desired-state shadow.
  * @details The bridge uses this helper when it decides that pending MQTT-side
  *          intent must be discarded, for example after a command storm
@@ -517,6 +816,7 @@ void ControllerSerialLink::clearPendingActuatorBatchLocked()
     this->realignDesiredStateShadowWithAuthoritativeLocked();
     this->desiredDirtyActuators.reset();
     this->refreshPendingActuatorBatchStateLocked();
+    this->bumpActuatorCommandBatchRevisionLocked();
 }
 
 /**
@@ -539,14 +839,14 @@ void ControllerSerialLink::refreshPendingActuatorBatchStateLocked(bool restartSe
     }
     else if (!wasBatchPending)
     {
-        const auto now = timeKeeper::getRealTime();
+        const auto now = timeKeeper::getTime();
         this->firstDesiredActuatorUpdate_ms = now;
         this->lastDesiredActuatorUpdate_ms = now;
         this->pendingActuatorMutationCount = markNewMutation ? 1U : 0U;
     }
     else if (restartSettleWindow)
     {
-        this->lastDesiredActuatorUpdate_ms = timeKeeper::getRealTime();
+        this->lastDesiredActuatorUpdate_ms = timeKeeper::getTime();
     }
 
     if (this->actuatorCommandBatchPending && markNewMutation && wasBatchPending &&
@@ -554,6 +854,19 @@ void ControllerSerialLink::refreshPendingActuatorBatchStateLocked(bool restartSe
     {
         ++this->pendingActuatorMutationCount;
     }
+
+    if (markNewMutation)
+    {
+        this->bumpActuatorCommandBatchRevisionLocked();
+    }
+}
+
+/**
+ * @brief Advance the desired-state revision used to validate unlocked serial sends.
+ */
+void ControllerSerialLink::bumpActuatorCommandBatchRevisionLocked() noexcept
+{
+    ++this->actuatorCommandBatchRevision;
 }
 
 /**
@@ -623,7 +936,7 @@ auto ControllerSerialLink::stageSingleActuatorCommand(uint8_t actuatorId, bool s
 auto ControllerSerialLink::stageDesiredPackedState(const JsonArrayConst &packedBytes) -> bool
 {
     const auto totalActuators = this->virtualDevice.getTotalActuators();
-    const std::size_t expectedBytes = (static_cast<std::size_t>(totalActuators) + 7U) / 8U;
+    const std::uint8_t expectedBytes = packedStateByteCount(totalActuators);
     if (packedBytes.isNull() || packedBytes.size() != expectedBytes)
     {
         return false;
@@ -663,23 +976,61 @@ auto ControllerSerialLink::stageDesiredPackedState(const JsonArrayConst &packedB
 }
 
 /**
+ * @brief Stage a full packed SET_STATE request from raw validated MQTT bytes.
+ */
+auto ControllerSerialLink::stageDesiredPackedStateBytes(const std::uint8_t *packedBytes, std::uint8_t packedByteCount) -> bool
+{
+    const auto totalActuators = this->virtualDevice.getTotalActuators();
+    const std::uint8_t expectedBytes = packedStateByteCount(totalActuators);
+    if (packedBytes == nullptr || packedByteCount != expectedBytes)
+    {
+        return false;
+    }
+
+    if (totalActuators == 0U)
+    {
+        return true;
+    }
+
+    DesiredActuatorStateBitset desiredSnapshot{};
+    if (!decodeDesiredPackedStateBytes(packedBytes, packedByteCount, totalActuators, desiredSnapshot))
+    {
+        return false;
+    }
+
+    this->lockActuatorCommandState();
+    const bool snapshotAlreadyPending = this->actuatorCommandBatchPending && this->desiredActuatorStates == desiredSnapshot;
+    if (snapshotAlreadyPending)
+    {
+        DPL("Ignoring duplicate pending SET_STATE snapshot.");
+        this->unlockActuatorCommandState();
+        return true;
+    }
+
+    this->desiredActuatorStates = desiredSnapshot;
+    this->desiredDirtyActuators = desiredSnapshot ^ this->virtualDevice.getStateBits();
+    this->refreshPendingActuatorBatchStateLocked(true, true);
+    this->unlockActuatorCommandState();
+
+    return true;
+}
+
+/**
  * @brief Send the coalesced SET_STATE batch once the quiet window expires.
  * @details This method snapshots the desired-state shadow, waits for a short
  *          period without newer writes, then emits one packed SET_STATE frame
- *          that represents the full desired batch. The desired-state mutex
- *          stays held from the last "is this snapshot still valid?" decision
- *          through the serial write itself, so a newer MQTT/Homie command
- *          cannot slip in after the bridge already committed to sending the
- *          current packed batch. If a producer keeps changing the desired state
- *          for too long or too many times in a single batch, the bridge treats
- *          that traffic as unstable and drops the batch once the safety limits
- *          are exceeded. If the UART refuses the outbound frame, the batch is
- *          left pending so the next loop can retry the same authoritative
- *          intent instead of silently forgetting it.
+ *          that represents the full desired batch. The mutex is held only while
+ *          taking and committing the snapshot; serial I/O happens outside the
+ *          lock and is guarded by a revision check before the batch is cleared.
+ *          If a producer keeps changing the desired state for too long or too
+ *          many times in a single batch, the bridge treats that traffic as
+ *          unstable and drops the batch once the safety limits are exceeded. If
+ *          the UART refuses the outbound frame, the batch is left pending so the
+ *          next loop can retry the same authoritative intent instead of
+ *          silently forgetting it.
  */
 void ControllerSerialLink::processPendingActuatorBatch()
 {
-    const auto now = timeKeeper::getRealTime();
     const auto totalActuators = this->virtualDevice.getTotalActuators();
     if (totalActuators == 0U)
     {
@@ -690,6 +1041,8 @@ void ControllerSerialLink::processPendingActuatorBatch()
     std::uint32_t firstDesiredUpdate_ms = 0U;
     std::uint32_t lastDesiredUpdate_ms = 0U;
     std::uint16_t pendingMutationCount = 0U;
+    std::uint16_t snapshotRevision = 0U;
+    DesiredActuatorStateBitset desiredSnapshot{};
 
     this->lockActuatorCommandState();
     batchPending = this->actuatorCommandBatchPending;
@@ -703,6 +1056,7 @@ void ControllerSerialLink::processPendingActuatorBatch()
         return;
     }
 
+    const auto now = timeKeeper::getTime();
     const bool settleWindowElapsed = (now - lastDesiredUpdate_ms) >= constants::runtime::ACTUATOR_COMMAND_SETTLE_INTERVAL_MS;
     const bool pendingWindowExceeded =
         firstDesiredUpdate_ms != 0U && (now - firstDesiredUpdate_ms) >= constants::runtime::ACTUATOR_COMMAND_MAX_PENDING_MS;
@@ -714,9 +1068,9 @@ void ControllerSerialLink::processPendingActuatorBatch()
         return;
     }
 
-    // Snapshot under the same mutex used by staging so the later "serialize and
-    // send" step cannot observe a half-updated desired-state batch.
-    const DesiredActuatorStateBitset desiredSnapshot = this->desiredActuatorStates;
+    // Snapshot under the same mutex used by staging; serial I/O happens after
+    // unlocking and is committed only if this revision is still current.
+    desiredSnapshot = this->desiredActuatorStates;
 
     if (pendingWindowExceeded || mutationBudgetExceeded)
     {
@@ -747,17 +1101,22 @@ void ControllerSerialLink::processPendingActuatorBatch()
         return;
     }
 
-    using namespace lsh::bridge::protocol;
-    this->serializationDoc.clear();
-    this->serializationDoc[KEY_PAYLOAD] = static_cast<uint8_t>(Command::SET_STATE);
-    auto packedStates = this->serializationDoc.createNestedArray(KEY_STATE);
-    appendPackedStateBytes(desiredSnapshot, totalActuators, packedStates);
+    snapshotRevision = this->actuatorCommandBatchRevision;
+    this->unlockActuatorCommandState();
 
-    if (!this->sendJson(this->serializationDoc))
+    if (!this->sendSetStateCommand(desiredSnapshot, totalActuators))
     {
-        this->unlockActuatorCommandState();
         DPL("Serial TX did not accept the coalesced SET_STATE batch. Keeping the "
             "desired-state batch pending for retry.");
+        return;
+    }
+
+    this->lockActuatorCommandState();
+    if (!this->actuatorCommandBatchPending || this->actuatorCommandBatchRevision != snapshotRevision)
+    {
+        this->unlockActuatorCommandState();
+        DPL("A newer actuator batch arrived while SET_STATE was being sent. "
+            "Keeping the newer desired state pending.");
         return;
     }
 
@@ -799,6 +1158,7 @@ void ControllerSerialLink::reconcileDesiredActuatorStatesFromAuthoritative()
         this->desiredActuatorStates = (previousDesired & this->desiredDirtyActuators) | (authoritativeState & ~this->desiredDirtyActuators);
         const bool wasBatchPending = this->actuatorCommandBatchPending;
         this->refreshPendingActuatorBatchStateLocked();
+        this->bumpActuatorCommandBatchRevisionLocked();
         if (wasBatchPending && !this->actuatorCommandBatchPending)
         {
             DPL("Cleared pending actuator batch during authoritative "
@@ -812,6 +1172,7 @@ void ControllerSerialLink::reconcileDesiredActuatorStatesFromAuthoritative()
         this->desiredActuatorStates = authoritativeState;
         this->desiredDirtyActuators.reset();
         this->refreshPendingActuatorBatchStateLocked();
+        this->bumpActuatorCommandBatchRevisionLocked();
     }
     this->unlockActuatorCommandState();
 }
@@ -852,6 +1213,80 @@ void ControllerSerialLink::clearPendingActuatorStormDiagnostic()
 }
 
 /**
+ * @brief Count one Homie command that was consumed locally but not staged.
+ *
+ * @param reason why the Homie `/set` value could not become controller intent.
+ */
+void ControllerSerialLink::recordRejectedHomieCommand(HomieRejectedCommandReason reason)
+{
+    this->lockActuatorCommandState();
+    switch (reason)
+    {
+    case HomieRejectedCommandReason::RuntimeDesynchronized:
+        incrementDiagnosticCounter(this->rejectedHomieDesyncCommandCount);
+        break;
+
+    case HomieRejectedCommandReason::InvalidPayload:
+        incrementDiagnosticCounter(this->rejectedHomieInvalidPayloadCommandCount);
+        break;
+
+    case HomieRejectedCommandReason::StageFailed:
+        incrementDiagnosticCounter(this->rejectedHomieStageFailedCommandCount);
+        break;
+    }
+    this->unlockActuatorCommandState();
+}
+
+/**
+ * @brief Clear accumulated Homie rejected-command counters.
+ */
+void ControllerSerialLink::clearRejectedHomieCounters()
+{
+    this->lockActuatorCommandState();
+    this->rejectedHomieDesyncCommandCount = 0U;
+    this->rejectedHomieInvalidPayloadCommandCount = 0U;
+    this->rejectedHomieStageFailedCommandCount = 0U;
+    this->unlockActuatorCommandState();
+}
+
+/**
+ * @brief Snapshot accumulated Homie rejected-command counters.
+ */
+void ControllerSerialLink::snapshotRejectedHomieCounters(std::uint16_t &outRejectedDesyncCommands,
+                                                         std::uint16_t &outRejectedInvalidPayloadCommands,
+                                                         std::uint16_t &outRejectedStageFailedCommands)
+{
+    this->lockActuatorCommandState();
+    outRejectedDesyncCommands = this->rejectedHomieDesyncCommandCount;
+    outRejectedInvalidPayloadCommands = this->rejectedHomieInvalidPayloadCommandCount;
+    outRejectedStageFailedCommands = this->rejectedHomieStageFailedCommandCount;
+    this->unlockActuatorCommandState();
+}
+
+/**
+ * @brief Consume Homie rejected-command counters after a successful diagnostic publish.
+ */
+void ControllerSerialLink::consumeRejectedHomieCounters(std::uint16_t rejectedDesyncCommands,
+                                                        std::uint16_t rejectedInvalidPayloadCommands,
+                                                        std::uint16_t rejectedStageFailedCommands)
+{
+    this->lockActuatorCommandState();
+    this->rejectedHomieDesyncCommandCount =
+        rejectedDesyncCommands >= this->rejectedHomieDesyncCommandCount
+            ? 0U
+            : static_cast<std::uint16_t>(this->rejectedHomieDesyncCommandCount - rejectedDesyncCommands);
+    this->rejectedHomieInvalidPayloadCommandCount =
+        rejectedInvalidPayloadCommands >= this->rejectedHomieInvalidPayloadCommandCount
+            ? 0U
+            : static_cast<std::uint16_t>(this->rejectedHomieInvalidPayloadCommandCount - rejectedInvalidPayloadCommands);
+    this->rejectedHomieStageFailedCommandCount =
+        rejectedStageFailedCommands >= this->rejectedHomieStageFailedCommandCount
+            ? 0U
+            : static_cast<std::uint16_t>(this->rejectedHomieStageFailedCommandCount - rejectedStageFailedCommands);
+    this->unlockActuatorCommandState();
+}
+
+/**
  * @brief Register the high-level payload callback used by the outer bridge runtime.
  *
  * @param callback delegate invoked after one complete controller frame has been
@@ -878,7 +1313,7 @@ void ControllerSerialLink::processSerialBuffer()
     std::uint16_t consumedBytes = 0U;
 
 #ifdef CONFIG_MSG_PACK_ARDUINO
-    const std::uint32_t nowRealTime_ms = timeKeeper::getRealTime();
+    const std::uint32_t nowRealTime_ms = timeKeeper::getTime();
     this->msgPackFrameReceiver.resetIfIdle(nowRealTime_ms, constants::controllerSerial::ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS);
 
     while (this->serial->available() && consumedBytes < constants::controllerSerial::SERIAL_MAX_RX_BYTES_PER_LOOP)
@@ -1140,15 +1575,9 @@ auto ControllerSerialLink::triggerFailoverFromReceivedClick() -> constants::Dese
                                                             : DeserializeExitCode::ERR_NOT_FORWARDED_OTHER_PROBLEM;
     }
 
-    this->serializationDoc.clear();
-
-    this->serializationDoc[KEY_PAYLOAD] = static_cast<uint8_t>(Command::FAILOVER_CLICK);
-    this->serializationDoc[KEY_TYPE] = clickPayload.clickType;
-    this->serializationDoc[KEY_ID] = clickPayload.clickableId;
-    this->serializationDoc[KEY_CORRELATION_ID] = clickPayload.correlationId;
-
-    return this->sendJson(this->serializationDoc) ? DeserializeExitCode::ERR_NOT_CONNECTED_FAILOVER_SENT
-                                                  : DeserializeExitCode::ERR_NOT_FORWARDED_OTHER_PROBLEM;
+    return this->sendClickCommand(Command::FAILOVER_CLICK, clickPayload.clickType, clickPayload.clickableId, clickPayload.correlationId)
+               ? DeserializeExitCode::ERR_NOT_CONNECTED_FAILOVER_SENT
+               : DeserializeExitCode::ERR_NOT_FORWARDED_OTHER_PROBLEM;
 }
 
 /**

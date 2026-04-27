@@ -23,6 +23,7 @@
 
 #include <cstdint>
 
+#include "constants/configs/homie_convention.hpp"
 #include <HomieNode.hpp>
 #include <etl/string.h>
 
@@ -58,7 +59,7 @@ private:
     const std::uint8_t actuatorIndex;            //!< Index of this actuator for O(1) access.
     const std::uint8_t actuatorId;               //!< Logical numeric actuator ID used on the wire.
 
-    [[nodiscard]] auto handleSetCommand(const HomieRange &range, const String &value) -> bool;
+    void handleSetCommand(const HomieRange &range, const String &value);
 
 public:
     /** @brief Construct one Homie node that mirrors one cached controller actuator. */
@@ -71,7 +72,15 @@ public:
         this->advertise(constants::homie::HOMIE_PROPERTY_ADVERTISE)
             .setName(this->homieId.c_str())
             .setDatatype(constants::homie::HOMIE_PROPERTY_DATATYPE_BOOLEAN)
-            .settable([this](const HomieRange &range, const String &value) -> bool { return this->handleSetCommand(range, value); });
+            .settable(
+                [this](const HomieRange &range, const String &value) -> bool
+                {
+                    this->handleSetCommand(range, value);
+                    // The bridge consumes every node-scoped Homie write here. Invalid
+                    // or temporarily unsafe values are intentionally dropped locally
+                    // instead of falling through to Homie's global input handler.
+                    return true;
+                });
     }
 
     [[nodiscard]] auto sendState() const -> bool;

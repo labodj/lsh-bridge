@@ -53,13 +53,30 @@ enum class MqttRejectedCommandReason : std::uint8_t
 };
 
 /**
+ * @brief Internal lifecycle of one MQTT command queue slot.
+ */
+enum class MqttCommandSlotState : std::uint8_t
+{
+    Free,     //!< The slot can be reserved by a producer.
+    Writing,  //!< A producer reserved the slot and is copying payload bytes outside the queue lock.
+    Ready,    //!< The slot contains one complete command visible to the main loop.
+    Reading   //!< The main loop reserved the slot and is copying payload bytes outside the queue lock.
+};
+
+/**
  * @brief Fixed-size storage slot for one queued MQTT command.
  */
 struct QueuedMqttCommand
 {
     MqttCommandSource source = MqttCommandSource::Device;  //!< Topic family that produced this command.
     std::uint16_t length = 0U;                             //!< Number of valid bytes currently stored in `payload`.
-    std::uint8_t payload[constants::controllerSerial::MQTT_COMMAND_MESSAGE_MAX_SIZE]{};  //!< Raw queued MQTT payload bytes.
+    MqttCommandSlotState state = MqttCommandSlotState::Free;  //!< Internal slot lifecycle, ignored for stack-local command copies.
+    std::uint16_t generation = 0U;  //!< Queue generation that reserved this slot, used to reject stale commits after clear().
+    std::uint16_t sequence = 0U;    //!< Reservation order, used to preserve command ordering while copies happen outside the lock.
+    // Intentionally not zero-initialized for stack locals: dequeue() writes only
+    // `length` live bytes, and parsers receive that exact length. This avoids a
+    // full command-buffer memset before every queued MQTT command is processed.
+    std::uint8_t payload[constants::controllerSerial::MQTT_COMMAND_MESSAGE_MAX_SIZE];  //!< Raw queued MQTT payload bytes.
 };
 
 /**
@@ -67,9 +84,10 @@ struct QueuedMqttCommand
  * @details The queue is intentionally small and fully static. The AsyncMqttClient
  *          callback only validates and copies complete frames into this buffer;
  *          parsing happens later in the main loop where it can be coordinated
- *          with controller serial traffic. Enqueue keeps the full slot commit
- *          under the queue lock so disconnect teardown cannot reuse a slot
- *          while an older callback is still finishing its copy.
+ *          with controller serial traffic. Slot payload copies happen outside
+ *          the queue lock; disconnect teardown advances the generation and
+ *          only frees completed slots so in-flight copies cannot race with a
+ *          later producer reusing the same storage.
  */
 class MqttCommandQueue
 {
@@ -78,9 +96,10 @@ private:
 
     QueuedMqttCommand queue[constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY]{};  //!< Fixed storage for queued MQTT commands.
     portMUX_TYPE queueMux = portMUX_INITIALIZER_UNLOCKED;  //!< Protects queue indices and drop counters across callback/main-loop access.
-    std::uint8_t head = 0U;                                //!< Ring-buffer index of the next command to dequeue.
     std::uint8_t tail = 0U;                                //!< Ring-buffer index of the next free enqueue slot.
-    std::uint8_t count = 0U;                               //!< Number of commands currently stored in `queue`.
+    std::uint8_t count = 0U;                               //!< Number of non-free slots, including in-flight Writing/Reading slots.
+    std::uint16_t queueGeneration = 1U;                    //!< Incremented by clear() so stale unlocked copies cannot commit.
+    std::uint16_t nextSequence = 1U;                       //!< Monotonic slot reservation sequence; wrap-safe while capacity stays small.
     std::uint16_t droppedDeviceCommandCount = 0U;          //!< Aggregated number of dropped device-topic commands.
     std::uint16_t droppedServiceCommandCount = 0U;         //!< Aggregated number of dropped service-topic commands.
     std::uint16_t rejectedRetainedCommandCount = 0U;       //!< Aggregated number of retained commands rejected before enqueue.

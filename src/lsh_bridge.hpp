@@ -23,7 +23,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 
 class HardwareSerial;
 struct HomieEvent;                        //!< Forward declaration of the Homie event payload.
@@ -31,6 +30,16 @@ struct AsyncMqttClientMessageProperties;  //!< Forward declaration of the AsyncM
 
 namespace lsh::bridge
 {
+
+namespace detail
+{
+#ifndef CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE
+inline constexpr std::size_t BRIDGE_IMPL_STORAGE_SIZE = 3072U;
+#else
+static_assert(CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE > 0U, "CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE must be greater than zero.");
+inline constexpr std::size_t BRIDGE_IMPL_STORAGE_SIZE = CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE;
+#endif
+}  // namespace detail
 
 /**
  * @brief Controls bridge runtime logging behavior.
@@ -76,8 +85,13 @@ public:
     [[nodiscard]] auto deviceName() const noexcept -> const char *;
 
 private:
-    class Impl;                            //!< Forward declaration of the hidden runtime implementation.
-    std::unique_ptr<Impl> implementation;  //!< PIMPL used to keep the public facade small.
+    class Impl;  //!< Forward declaration of the hidden runtime implementation.
+    // The bridge keeps its implementation opaque without using heap allocation.
+    // If a custom capacity profile ever makes Impl larger, the build fails with
+    // a clear static_assert in lsh_bridge.cpp and the embedding firmware can
+    // raise CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE explicitly.
+    alignas(std::max_align_t) std::byte implementationStorage[detail::BRIDGE_IMPL_STORAGE_SIZE]{};
+    Impl *implementation = nullptr;
 
     static LSHBridge *activeInstance;
     static void onHomieEventStatic(const HomieEvent &event);

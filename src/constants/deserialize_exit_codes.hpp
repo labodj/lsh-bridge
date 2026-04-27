@@ -40,14 +40,14 @@ enum class DeserializeExitCode : std::uint8_t
     OK_STATE,                                 //!< State received OK
     OK_PING,                                  //!< Ping received OK
     OK_BOOT,                                  //!< Boot received OK
-    OK_FORWARDED,                             //!< Json has been forwarded to MQTT broker
+    OK_FORWARDED,                             //!< Payload has been forwarded to MQTT broker
     OK_NETWORK_CLICK_REQUEST,                 //!< Network click request received and stored OK
     OK_NETWORK_CLICK_CONFIRM,                 //!< Network click confirmation received and stored OK
     OK_OTHER_PAYLOAD,                         //!< Other (unknown) payload received
     ERR,                                      //!< General use ERR
     ERR_INCOMPLETE,                           //!< Incomplete payload received
-    ERR_JSON_ERROR,                           //!< Json is malformed, invalid input or serial timeout
-    ERR_DOC_NULL,                             //!< Json is empty
+    ERR_JSON_ERROR,                           //!< Decoded payload is malformed, invalid input or serial timeout
+    ERR_DOC_NULL,                             //!< Decoded payload document is empty
     ERR_MISSING_KEY_PAYLOAD,                  //!< Payload content key is missing
     ERR_MISSING_KEY_STATE,                    //!< State key is missing or not an array
     ERR_UNKNOWN_PAYLOAD,                      //!< Payload unknown
@@ -60,14 +60,14 @@ enum class DeserializeExitCode : std::uint8_t
     ERR_LONG_CLICKED_BUTTON_IMPLAUSIBLE,      //!< Received long clicked button not in range (min=0, max=total buttons)
     ERR_CLICK_CORRELATION_ID_IMPLAUSIBLE,     //!< Received network click correlation ID is missing or not a positive uint8_t
     ERR_NOT_FORWARDED_OTHER_PROBLEM,          //!< Message not forwarded due to another problem
-    ERR_NOT_USEFUL_JSON,                      //!< Received Json payload is well formed but not actionable in the current bridge phase
+    ERR_NOT_USEFUL_JSON,                      //!< Received payload is well formed but not actionable in the current bridge phase
     ERR_NO_ACTUATORS,                         //!< No actuators array received
     ERR_ACTUATORS_MISMATCH,                   //!< Received actuators state array size is different than stored total actuators
     ERR_STATE_VALUE_IMPLAUSIBLE,              //!< Received state payload contains non-byte entries
     ERR_MISSING_KEY_PROTOCOL_MAJOR,           //!< Missing handshake-only protocol major in details payload
     ERR_PROTOCOL_MAJOR_MISMATCH,              //!< Received protocol major is not compatible with this firmware
-    ERR_MISSING_KEY_ACTUATORS_IDS,            //!< Missing actuators UUIDs key from Json
-    ERR_MISSING_KEY_BUTTONS_IDS,              //!< Missing buttons UUIDs key from Json
+    ERR_MISSING_KEY_ACTUATORS_IDS,            //!< Missing actuators UUIDs key from decoded payload
+    ERR_MISSING_KEY_BUTTONS_IDS,              //!< Missing buttons UUIDs key from decoded payload
     ERR_ACTUATORS_IDS_NUMBER_IMPLAUSIBLE,     //!< Total actuators UUIDs number is different than total actuators
     ERR_ACTUATOR_ID_IMPLAUSIBLE,              //!< Actuator IDs must be unique positive uint8_t values
     ERR_BUTTON_ID_IMPLAUSIBLE                 //!< Button IDs must be unique positive uint8_t values

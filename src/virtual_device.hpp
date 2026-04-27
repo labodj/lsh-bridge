@@ -24,10 +24,10 @@
 #include <cstdint>
 
 #include <ArduinoJson.h>
-#include <etl/bitset.h>
 #include <etl/string.h>
 #include <etl/vector.h>
 
+#include "actuator_state_mask.hpp"
 #include "constants/configs/virtual_device.hpp"
 
 /**
@@ -54,7 +54,7 @@ struct DeviceDetailsSnapshot
  *          inbound packed bytes. The runtime model only receives this canonical
  *          bitset form and applies it.
  */
-using ActuatorStateBitset = etl::bitset<constants::virtualDevice::MAX_ACTUATORS>;
+using ActuatorStateBitset = ActuatorStateMask;
 
 /**
  * @brief Holds the cached bridge-side model of the attached physical device.

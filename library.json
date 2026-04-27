@@ -30,8 +30,9 @@
       "version": "20.47.1"
     },
     {
-      "name": "homie-esp8266",
-      "version": "https://github.com/labodj/homie-esp8266.git#v3.1.2"
+      "owner": "labodj",
+      "name": "homie-v5",
+      "version": "3.3.1"
     }
   ],
   "export": {

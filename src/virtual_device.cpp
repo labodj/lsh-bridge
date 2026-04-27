@@ -157,19 +157,29 @@ auto VirtualDevice::populateDetailsDocument(JsonDocument &doc) const -> bool
     doc[KEY_PROTOCOL_MAJOR] = WIRE_PROTOCOL_MAJOR;
     doc[KEY_NAME] = this->name.c_str();
 
-    JsonArray actuatorIds = doc.createNestedArray(KEY_ACTUATORS_ARRAY);
+    JsonArray actuatorIdArray = doc.createNestedArray(KEY_ACTUATORS_ARRAY);
+    if (actuatorIdArray.isNull())
+    {
+        return false;
+    }
+
     for (const std::uint8_t actuatorId : this->actuatorIds)
     {
-        actuatorIds.add(actuatorId);
+        actuatorIdArray.add(actuatorId);
     }
 
-    JsonArray buttonIds = doc.createNestedArray(KEY_BUTTONS_ARRAY);
+    JsonArray buttonIdArray = doc.createNestedArray(KEY_BUTTONS_ARRAY);
+    if (buttonIdArray.isNull())
+    {
+        return false;
+    }
+
     for (const std::uint8_t buttonId : this->buttonIds)
     {
-        buttonIds.add(buttonId);
+        buttonIdArray.add(buttonId);
     }
 
-    return true;
+    return !doc.overflowed();
 }
 
 /**

@@ -154,7 +154,7 @@ public:
             return 0U;
         }
 
-        if (source == nullptr || this->buffer == nullptr || size > (this->capacity - this->length))
+        if (source == nullptr || this->buffer == nullptr || this->length > this->capacity || size > (this->capacity - this->length))
         {
             this->overflowed_ = true;
             return 0U;

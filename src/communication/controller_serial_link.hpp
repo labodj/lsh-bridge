@@ -27,11 +27,11 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <freertos/semphr.h>
-#include <etl/bitset.h>
 #include <etl/delegate.h>
 
+#include "actuator_state_mask.hpp"
+#include "constants/communication_protocol.hpp"
 #include "constants/controller_serial.hpp"
-#include "constants/button_click_types.hpp"
 #include "constants/configs/controller_serial.hpp"
 #include "constants/configs/runtime.hpp"
 #include "constants/configs/virtual_device.hpp"
@@ -61,11 +61,21 @@ public:
     };
 
     /**
+     * @brief Classify Homie `/set` commands consumed but not staged for the controller.
+     */
+    enum class HomieRejectedCommandReason : std::uint8_t
+    {
+        RuntimeDesynchronized,  //!< The bridge was waiting for a fresh authoritative controller state.
+        InvalidPayload,         //!< Homie delivered a value other than the accepted boolean literals.
+        StageFailed             //!< The node command was valid but could not be staged against the cached topology.
+    };
+
+    /**
      * @brief Compact desired-state shadow for the next outbound `SET_STATE` batch.
      * @details Bit positions follow the same dense runtime order used by the
      *          controller protocol and by `VirtualDevice::actuatorsState`.
      */
-    using DesiredActuatorStateBitset = etl::bitset<constants::virtualDevice::MAX_ACTUATORS>;
+    using DesiredActuatorStateBitset = ActuatorStateMask;
 
 private:
     HardwareSerial *const serial;                   //!< The serial port used to communicate with the controller.
@@ -79,9 +89,9 @@ private:
     // It is intentionally separate from VirtualDevice, which stores only the last
     // controller-confirmed authoritative state.
     DesiredActuatorStateBitset desiredActuatorStates{};  //!< Desired-state shadow used only to build the next outbound `SET_STATE` batch.
-    etl::bitset<constants::virtualDevice::MAX_ACTUATORS>
-        desiredDirtyActuators{};  //!< Outbound per-actuator mask for remote intent not yet confirmed by an authoritative controller state frame.
+    ActuatorStateMask desiredDirtyActuators{};  //!< Outbound per-actuator mask for remote intent not yet confirmed by an authoritative controller state frame.
     std::uint16_t pendingActuatorMutationCount = 0U;   //!< Number of accepted non-duplicate changes merged into the current batch.
+    std::uint16_t actuatorCommandBatchRevision = 0U;   //!< Monotonic guard used to avoid committing stale snapshots after serial TX.
     SemaphoreHandle_t actuatorCommandMutex = nullptr;  //!< Blocking mutex that protects the desired-state shadow across short serial sends.
     bool hasSeenControllerTraffic = false;     //!< True after the bridge has decoded at least one valid controller frame in this boot.
     bool actuatorCommandBatchPending = false;  //!< True while a coalesced outbound `SET_STATE` is still waiting for its quiet window.
@@ -89,7 +99,10 @@ private:
         false;                        //!< True while a dropped unstable batch is waiting to be reported to the outer bridge runtime.
     MessageCallback messageCallback;  //!< Registered callback invoked for each decoded payload.
     ActuatorStormDiagnostic
-        pendingActuatorStormDiagnostic{};  //!< Details about the last unstable batch dropped by the bridge safety valve.
+        pendingActuatorStormDiagnostic{};                //!< Details about the last unstable batch dropped by the bridge safety valve.
+    std::uint16_t rejectedHomieDesyncCommandCount = 0U;  //!< Homie writes dropped while the runtime model was stale.
+    std::uint16_t rejectedHomieInvalidPayloadCommandCount = 0U;  //!< Homie writes dropped because the value was not a boolean literal.
+    std::uint16_t rejectedHomieStageFailedCommandCount = 0U;     //!< Homie writes dropped because staging rejected the command.
 
     // Cold transport scratch space below this point.
     StaticJsonDocument<constants::controllerSerial::JSON_RECEIVED_MAX_SIZE> receivedDoc;  //!< Last received JSON document.
@@ -110,8 +123,8 @@ private:
     /** @brief Lock the desired-state shadow while the bridge updates or serializes it. */
     void lockActuatorCommandState()
     {
-        // A normal mutex is used here, not a spinlock, because the coalescing path
-        // may keep the lock while it writes one compact SET_STATE frame to serial.
+        // A normal mutex is used here, not a spinlock, because MQTT/Homie producers
+        // may run from a different task than the main bridge loop.
         (void)xSemaphoreTake(this->actuatorCommandMutex, portMAX_DELAY);
     }
 
@@ -132,6 +145,8 @@ private:
     void realignDesiredStateShadowWithAuthoritativeLocked();
     void clearPendingActuatorBatchLocked();
     void refreshPendingActuatorBatchStateLocked(bool restartSettleWindow = false, bool markNewMutation = false);
+    void bumpActuatorCommandBatchRevisionLocked() noexcept;
+    [[nodiscard]] auto sendSetStateCommand(const DesiredActuatorStateBitset &desiredSnapshot, std::uint8_t totalActuators) -> bool;
 
 public:
     /** @brief Construct the controller serial transport around one UART and one cached device model. */
@@ -170,6 +185,7 @@ public:
     [[nodiscard]] auto stageSingleActuatorCommand(std::uint8_t actuatorId, bool state) -> bool;
 
     [[nodiscard]] auto stageDesiredPackedState(const JsonArrayConst &packedBytes) -> bool;
+    [[nodiscard]] auto stageDesiredPackedStateBytes(const std::uint8_t *packedBytes, std::uint8_t packedByteCount) -> bool;
 
     void processPendingActuatorBatch();
 
@@ -181,7 +197,23 @@ public:
 
     void clearPendingActuatorStormDiagnostic();
 
+    void recordRejectedHomieCommand(HomieRejectedCommandReason reason);
+
+    void clearRejectedHomieCounters();
+
+    void snapshotRejectedHomieCounters(std::uint16_t &outRejectedDesyncCommands,
+                                       std::uint16_t &outRejectedInvalidPayloadCommands,
+                                       std::uint16_t &outRejectedStageFailedCommands);
+
+    void consumeRejectedHomieCounters(std::uint16_t rejectedDesyncCommands,
+                                      std::uint16_t rejectedInvalidPayloadCommands,
+                                      std::uint16_t rejectedStageFailedCommands);
+
     [[nodiscard]] auto triggerFailoverFromReceivedClick() -> constants::DeserializeExitCode;
+    [[nodiscard]] auto sendClickCommand(lsh::bridge::protocol::Command command,
+                                        std::uint8_t clickType,
+                                        std::uint8_t clickableId,
+                                        std::uint8_t correlationId) -> bool;
 
     [[nodiscard]] auto isConnected() const -> bool;
 };
