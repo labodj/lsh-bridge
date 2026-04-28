@@ -1,8 +1,5 @@
 name: CI & Release
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 on:
   push:
     branches: ["main"]
@@ -60,7 +57,21 @@ jobs:
         run: python3 -m pip install --upgrade pip "platformio==6.1.19"
 
       - name: Build public example
-        run: platformio run -d examples/basic-homie-bridge -e "${{ matrix.env }}"
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import pathlib
+          import re
+
+          path = pathlib.Path("examples/basic-homie-bridge/platformio.ini")
+          contents = path.read_text(encoding="utf-8")
+          registry_dependency = re.compile(r"(?m)^(\s*)labodj/lsh-bridge@.*$")
+          if not registry_dependency.search(contents):
+              raise SystemExit("Expected labodj/lsh-bridge registry dependency was not found")
+          contents = registry_dependency.sub(lambda match: f"{match.group(1)}lsh-bridge=symlink://../..", contents)
+          path.write_text(contents, encoding="utf-8")
+          PY
+          platformio run -d examples/basic-homie-bridge -e "${{ matrix.env }}"
 
   package-registry-smoke:
     needs: validate-generated-protocol
@@ -98,6 +109,46 @@ jobs:
           trap 'rm -f "$package_path"; rm -rf "$smoke_dir"' EXIT
 
           platformio pkg pack --output "$package_path"
+          python3 - "$package_path" <<'PY'
+          import re
+          import sys
+          import tarfile
+          from urllib.parse import urlsplit
+
+          package_path = sys.argv[1]
+          inline_link = re.compile(r"!?\[[^\]]+\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+          reference_link = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
+
+          def is_external(url: str) -> bool:
+              parsed = urlsplit(url)
+              return bool(parsed.scheme) or url.startswith("#")
+
+          def markdown_links(markdown: str):
+              yield from (match.group(1) for match in inline_link.finditer(markdown))
+              yield from (match.group(1) for match in reference_link.finditer(markdown))
+
+          with tarfile.open(package_path, "r:gz") as package:
+              markdown_members = sorted(
+                  member.name.rstrip("/")
+                  for member in package.getmembers()
+                  if member.isfile() and member.name.endswith(".md")
+              )
+
+              errors = []
+              for name in markdown_members:
+                  content = package.extractfile(name).read().decode("utf-8")
+                  for raw_url in markdown_links(content):
+                      url = raw_url.strip("<>")
+                      if is_external(url):
+                          continue
+                      parsed = urlsplit(url)
+                      if not parsed.path:
+                          continue
+                      errors.append(f"{name}: registry markdown uses relative link {raw_url}")
+
+              if errors:
+                  raise SystemExit("\n".join(errors))
+          PY
           tar -tzf "$package_path" | grep -F "docs/runtime-behavior.md"
           tar -tzf "$package_path" | grep -F "examples/basic-homie-bridge/platformio.ini"
           tar -tzf "$package_path" | grep -F "src/lsh_bridge.hpp"
@@ -106,10 +157,11 @@ jobs:
           mkdir -p "$smoke_dir/include" "$smoke_dir/src"
           cp examples/basic-homie-bridge/include/lsh_etl_profile_override.h "$smoke_dir/include/"
           cp examples/basic-homie-bridge/src/main.cpp "$smoke_dir/src/"
-          # Keep the checked-in example on the local symlink workflow; rewrite
+          # Keep the checked-in example on the public registry workflow; rewrite
           # only this temporary copy to prove the packed registry artifact works.
           python3 - "$package_path" "$smoke_dir" <<'PY'
           import pathlib
+          import re
           import sys
 
           package_path = sys.argv[1]
@@ -117,10 +169,10 @@ jobs:
           source = pathlib.Path("examples/basic-homie-bridge/platformio.ini")
           target = smoke_dir / "platformio.ini"
           contents = source.read_text(encoding="utf-8")
-          local_dependency = "lsh-bridge=symlink://../.."
-          if local_dependency not in contents:
-              raise SystemExit(f"Expected local dependency {local_dependency!r} was not found")
-          contents = contents.replace(local_dependency, f"file://{package_path}")
+          registry_dependency = re.compile(r"(?m)^(\s*)labodj/lsh-bridge@.*$")
+          if not registry_dependency.search(contents):
+              raise SystemExit("Expected labodj/lsh-bridge registry dependency was not found")
+          contents = registry_dependency.sub(lambda match: f"{match.group(1)}file://{package_path}", contents)
           target.write_text(contents, encoding="utf-8")
           PY
 
@@ -147,7 +199,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: lsh-bridge ${{ github.ref_name }}
           generate_release_notes: true

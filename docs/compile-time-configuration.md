@@ -2,7 +2,7 @@
 
 `lsh-bridge` keeps a deliberately small but important compile-time surface. All supported knobs are ordinary C/C++ preprocessor macros passed through PlatformIO `build_flags`.
 
-The bundled example in [`examples/basic-homie-bridge/platformio.ini`](../examples/basic-homie-bridge/platformio.ini) sets all value-like macros explicitly and leaves the behavior-changing flags commented.
+The bundled example in [`examples/basic-homie-bridge/platformio.ini`](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/platformio.ini) sets all value-like macros explicitly and leaves the behavior-changing flags commented.
 
 If you are new to the public stack, read these first:
 
@@ -13,7 +13,7 @@ If you are new to the public stack, read these first:
 
 Use this page when you need exact macro ownership, not the runtime story. For
 runtime behavior, diagnostics and startup semantics, read
-[runtime-behavior.md](./runtime-behavior.md).
+[runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
 
 ## Safe First-Lab Defaults
 
@@ -76,7 +76,7 @@ The bridge derives topic buffer sizes automatically from the compiled strings ab
 | --- | --- | --- |
 | `HOMIE_CONVENTION_VERSION` | required `5` | Selects the Homie MQTT convention compiled by the `labodj/homie-v5` PlatformIO package. `lsh-bridge` now requires v5 so discovery is published under `homie/5/<device>/$description`. |
 | `CONFIG_HOMIE_FIRMWARE_NAME` | `"lsh-homie"` | Firmware name exposed through Homie. |
-| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.3.2"` | Firmware version exposed through Homie. |
+| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.4.0"` | Firmware version exposed through Homie. |
 | `CONFIG_HOMIE_BRAND` | `"LaboSmartHome"` | Homie brand string exposed by the bridge. |
 
 `HOMIE_CONVENTION_VERSION=5` must be passed by the embedding PlatformIO
@@ -109,6 +109,7 @@ identity is intentionally compile-time only in the current bridge API.
 | `CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS` | `50U` | Quiet window used to coalesce multiple actuator writes into one outbound `SET_STATE`. |
 | `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS` | `1000U` | Hard limit for how long an unstable pending actuator batch may stay open before the bridge drops it. |
 | `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT` | `32U` | Maximum number of accepted state changes merged into one pending actuator batch before the bridge treats the producer as unstable. |
+| `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER` | `0` | Sets the default value of `BridgeOptions::disableResetTrigger`. Leave it at `0` to keep Homie's physical reset trigger enabled, or set it to `1` for unattended deployments where GPIO0/BOOT must not act as a factory-reset input. |
 
 ## Implementation storage
 
@@ -161,7 +162,7 @@ Serial MsgPack framing affects only the controller link. It does not change MQTT
 ## ETL profile override
 
 `lsh-bridge` ships with a default
-[`include/etl_profile.h`](../include/etl_profile.h) so the standard
+[`include/etl_profile.h`](https://github.com/labodj/lsh-bridge/blob/main/include/etl_profile.h) so the standard
 Arduino/PlatformIO case works without extra setup.
 
 That default profile intentionally keeps ETL compiler/platform detection on the
@@ -191,7 +192,7 @@ provide your own project-level `etl_profile.h` earlier in the include path and
 bypass the one shipped by `lsh-bridge`.
 
 The bundled example already demonstrates this hook through
-[`examples/basic-homie-bridge/include/lsh_etl_profile_override.h`](../examples/basic-homie-bridge/include/lsh_etl_profile_override.h)
+[`examples/basic-homie-bridge/include/lsh_etl_profile_override.h`](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/include/lsh_etl_profile_override.h)
 and the matching `LSH_ETL_PROFILE_OVERRIDE_HEADER` build flag in the example
 `platformio.ini`.
 
@@ -206,12 +207,12 @@ above and are not exposed as public compile-time values:
 - the NVS-backed `DEVICE_DETAILS` cache and its on-change write policy
 
 Those behaviors are documented in
-[`docs/runtime-behavior.md`](./runtime-behavior.md).
+[`docs/runtime-behavior.md`](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
 
 ## Read Next
 
-- For runtime policy and diagnostics: [runtime-behavior.md](./runtime-behavior.md)
-- For the bridge overview and example entry point: [../README.md](../README.md)
+- For runtime policy and diagnostics: [runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md)
+- For the bridge overview and example entry point: [README.md](https://github.com/labodj/lsh-bridge/blob/main/README.md)
 - For the public stack profile: <https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md>
 - For first-lab symptom diagnosis: <https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md>
 
@@ -241,7 +242,7 @@ build_flags =
     -D CONFIG_MQTT_TOPIC_SERVICE=\"LSH/Node-RED/SRV\"
     -D HOMIE_CONVENTION_VERSION=5
     -D CONFIG_HOMIE_FIRMWARE_NAME=\"lsh-homie\"
-    -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.3.2\"
+    -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.4.0\"
     -D CONFIG_HOMIE_BRAND=\"LaboSmartHome\"
     -D CONFIG_PING_INTERVAL_CONTROLLINO_MS=10000U
     -D CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS=10200U
@@ -256,6 +257,8 @@ build_flags =
     ; -D CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS=50U
     ; -D CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS=1000U
     ; -D CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT=32U
+    ; -D CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER=1
+    ; default: 0, Homie's physical reset trigger remains enabled
     ; -D CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE=3072U
     -D CONFIG_MSG_PACK_ARDUINO
     ; default: undefined

@@ -5,7 +5,7 @@ integrating, debugging or operating the bridge in the field.
 
 Some of the key thresholds below are exposed as compile-time `CONFIG_*`
 macros. This page documents the behavior itself; the complete build-time knob
-reference lives in [`compile-time-configuration.md`](./compile-time-configuration.md).
+reference lives in [`compile-time-configuration.md`](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md).
 
 If you are new to the public stack, read these first:
 
@@ -207,6 +207,12 @@ Current behavior:
 
 - on a brand-new or already-reset device, `Homie.setup()` enters setup/AP mode
   by itself when the configuration is missing
+- by default Homie's physical reset trigger remains enabled; unattended ESP32
+  bridge boards can disable it through `BridgeOptions::disableResetTrigger` or
+  `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER=1`
+- by default `BridgeOptions::disableWifiSleep` disables ESP32 Wi-Fi modem sleep,
+  prioritizing MQTT liveness over low-power behavior for mains-powered bridge
+  deployments
 - when `HOMIE_RESET` is defined, the bridge calls `Homie.reset()` only if a
   valid stored Homie configuration is actually present
 - this keeps the "force setup on next boot" workflow intact without creating a
@@ -225,6 +231,7 @@ Current diagnostic kinds:
 - `mqtt_command_rejected`
 - `homie_command_rejected`
 - `topology_changed`
+- `last_reset_phase`
 
 Logical payload shape for `actuator_command_storm_dropped`:
 
@@ -344,6 +351,29 @@ Meaning:
   `waiting_details`, `waiting_state`, `synced` and
   `topology_migration_pending_reboot`
 
+Logical payload shape for `last_reset_phase`:
+
+```json
+{
+  "event": "diagnostic",
+  "kind": "last_reset_phase",
+  "phase": "homie_loop",
+  "phase_ms": 2593000,
+  "boot_count": 6
+}
+```
+
+Meaning:
+
+- `phase`: bridge loop phase last recorded in RTC memory before this boot
+- `phase_ms`: `millis()` value captured with that phase
+- `boot_count`: bridge-local RTC boot counter captured before the current boot
+  increments it
+
+This diagnostic is retained by design. It describes the previous boot, not a
+current-session warning, so late subscribers can still inspect the last
+observed reset phase after the device has recovered.
+
 ## What Is Not A Stable Runtime Contract
 
 The bridge keeps some behavior intentionally outside the stable public runtime
@@ -356,7 +386,7 @@ contract:
 
 ## Read Next
 
-- For exact `CONFIG_*` ownership: [compile-time-configuration.md](./compile-time-configuration.md)
-- For the bridge overview and bundled example: [../README.md](../README.md)
+- For exact `CONFIG_*` ownership: [compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md)
+- For the bridge overview and bundled example: [README.md](https://github.com/labodj/lsh-bridge/blob/main/README.md)
 - For the public stack semantics around `BOOT`, `PING` and startup repair: <https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md>
 - For symptom-based first-lab diagnosis: <https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md>

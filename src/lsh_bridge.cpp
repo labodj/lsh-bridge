@@ -29,6 +29,10 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <AsyncMqttClient.h>
+#ifdef ESP32
+#include <esp_attr.h>
+#include <WiFi.h>
+#endif
 #include "constants/configs/homie_convention.hpp"
 #include <Homie.h>
 #include <etl/bitset.h>
@@ -65,6 +69,133 @@ constexpr char kTopologyChangedDiagnostic[] =
     "topology_changed";  //!< Diagnostic value emitted when the controller reports a topology different from the cached one.
 constexpr std::uint16_t kTopologyChangedDiagnosticGraceMs =
     150U;  //!< Short grace window that gives the MQTT client one chance to flush `topology_changed` before rebooting.
+constexpr std::uint32_t kBridgeBreadcrumbMagic = 0x4C534842UL;  //!< "LSHB" marker for RTC loop-phase breadcrumbs.
+constexpr char kBridgeBreadcrumbEvent[] = "diagnostic";
+constexpr char kBridgeBreadcrumbKind[] = "last_reset_phase";
+constexpr char kBridgeDiagnosticEventKey[] = "event";
+constexpr char kBridgeDiagnosticKindKey[] = "kind";
+constexpr char kBridgeBreadcrumbPhaseKey[] = "phase";
+constexpr char kBridgeBreadcrumbPhaseMsKey[] = "phase_ms";
+constexpr char kBridgeBreadcrumbBootCountKey[] = "boot_count";
+constexpr std::uint16_t kBridgeBreadcrumbDocSize = 192U;
+
+enum class BridgeLoopPhase : std::uint8_t
+{
+    Unknown = 0,
+    Begin,
+    BeginSerial,
+    BeginCache,
+    BeginConfigureHomie,
+    BeginHomieSetup,
+    BeginWaitingForDetails,
+    LoopStart,
+    HomieLoop,
+    SerialRx,
+    MqttQueue,
+    ControllerConnectivity,
+    MqttResync,
+    Bootstrap,
+    TopologyMigration,
+    ActuatorBatch,
+    StatePublish,
+    BridgeDiagnostics,
+    SerialPing,
+    LoopEnd
+};
+
+#ifdef ESP32
+RTC_NOINIT_ATTR std::uint32_t bridgeBreadcrumbMagic;
+RTC_NOINIT_ATTR std::uint32_t bridgeBreadcrumbBootCount;
+RTC_NOINIT_ATTR std::uint32_t bridgeBreadcrumbLastMillis;
+RTC_NOINIT_ATTR std::uint8_t bridgeBreadcrumbLastPhase;
+#endif
+
+[[nodiscard]] auto bridgeLoopPhaseName(BridgeLoopPhase phase) -> const char *
+{
+    switch (phase)
+    {
+    case BridgeLoopPhase::Begin:
+        return "begin";
+    case BridgeLoopPhase::BeginSerial:
+        return "begin_serial";
+    case BridgeLoopPhase::BeginCache:
+        return "begin_cache";
+    case BridgeLoopPhase::BeginConfigureHomie:
+        return "begin_configure_homie";
+    case BridgeLoopPhase::BeginHomieSetup:
+        return "begin_homie_setup";
+    case BridgeLoopPhase::BeginWaitingForDetails:
+        return "begin_waiting_for_details";
+    case BridgeLoopPhase::LoopStart:
+        return "loop_start";
+    case BridgeLoopPhase::HomieLoop:
+        return "homie_loop";
+    case BridgeLoopPhase::SerialRx:
+        return "serial_rx";
+    case BridgeLoopPhase::MqttQueue:
+        return "mqtt_queue";
+    case BridgeLoopPhase::ControllerConnectivity:
+        return "controller_connectivity";
+    case BridgeLoopPhase::MqttResync:
+        return "mqtt_resync";
+    case BridgeLoopPhase::Bootstrap:
+        return "bootstrap";
+    case BridgeLoopPhase::TopologyMigration:
+        return "topology_migration";
+    case BridgeLoopPhase::ActuatorBatch:
+        return "actuator_batch";
+    case BridgeLoopPhase::StatePublish:
+        return "state_publish";
+    case BridgeLoopPhase::BridgeDiagnostics:
+        return "bridge_diagnostics";
+    case BridgeLoopPhase::SerialPing:
+        return "serial_ping";
+    case BridgeLoopPhase::LoopEnd:
+        return "loop_end";
+    case BridgeLoopPhase::Unknown:
+    default:
+        return "unknown";
+    }
+}
+
+[[nodiscard]] auto isBridgeLoopPhaseValueValid(std::uint8_t phase) -> bool
+{
+    return phase <= static_cast<std::uint8_t>(BridgeLoopPhase::LoopEnd);
+}
+
+void recordBridgeLoopPhase(BridgeLoopPhase phase)
+{
+#ifdef ESP32
+    bridgeBreadcrumbMagic = kBridgeBreadcrumbMagic;
+    bridgeBreadcrumbLastPhase = static_cast<std::uint8_t>(phase);
+    bridgeBreadcrumbLastMillis = millis();
+#else
+    (void)phase;
+#endif
+}
+
+[[nodiscard]] auto bridgeBreadcrumbsAreValid() -> bool
+{
+#ifdef ESP32
+    return bridgeBreadcrumbMagic == kBridgeBreadcrumbMagic && isBridgeLoopPhaseValueValid(bridgeBreadcrumbLastPhase);
+#else
+    return false;
+#endif
+}
+
+void initializeBridgeBreadcrumbs()
+{
+#ifdef ESP32
+    if (!bridgeBreadcrumbsAreValid())
+    {
+        bridgeBreadcrumbMagic = kBridgeBreadcrumbMagic;
+        bridgeBreadcrumbBootCount = 0U;
+        bridgeBreadcrumbLastMillis = 0U;
+        bridgeBreadcrumbLastPhase = static_cast<std::uint8_t>(BridgeLoopPhase::Unknown);
+    }
+    ++bridgeBreadcrumbBootCount;
+#endif
+}
 
 void writePayloadByte(lsh::bridge::communication::FixedBufferWriter &writer, std::uint8_t byte)
 {
@@ -334,12 +465,16 @@ public:
     bool isStarted = false;          //!< True after `begin()` has fully wired serial, Homie and callbacks.
     bool mqttResyncPending = false;  //!< True while MQTT-side resync still needs another retry after reconnect or publish refusal.
     bool topologyChangedDiagnosticPending =
-        false;                                   //!< True while `topology_changed` still needs one best-effort MQTT publish before reboot.
-    std::uint32_t lastMqttResyncAttemptMs = 0U;  //!< Real-time timestamp of the last autonomous MQTT-side resync attempt.
+        false;  //!< True while `topology_changed` still needs one best-effort MQTT publish before reboot.
+    bool bridgeBreadcrumbDiagnosticPending = false;  //!< True while the previous-boot loop breadcrumb still needs to be published.
+    std::uint32_t lastMqttResyncAttemptMs = 0U;      //!< Real-time timestamp of the last autonomous MQTT-side resync attempt.
     std::uint32_t topologyRebootPendingSinceMs =
         0U;  //!< Real-time timestamp of the successful topology save that started the reboot window.
     std::uint32_t topologyDiagnosticAcceptedMs = 0U;  //!< Real-time timestamp of the accepted `topology_changed` MQTT publish, if any.
-    runtime::RuntimeHotState runtimeState{};          //!< Hot controller-sync state grouped for locality and helper passing.
+    std::uint32_t previousBridgeLoopPhaseMs = 0U;     //!< Millis value recorded with the previous-boot loop breadcrumb.
+    std::uint32_t previousBridgeBootCount = 0U;       //!< RTC boot counter captured before the current boot increments it.
+    BridgeLoopPhase previousBridgeLoopPhase = BridgeLoopPhase::Unknown;  //!< Last recorded phase from the previous boot.
+    runtime::RuntimeHotState runtimeState{};  //!< Hot controller-sync state grouped for locality and helper passing.
     VirtualDevice virtualDevice{};
     ControllerSerialLink controllerSerialLink;
     AsyncMqttClient *mqttClient = nullptr;
@@ -348,6 +483,21 @@ public:
     BridgeOptions options{};
     etl::vector<LSHNode, constants::virtualDevice::MAX_ACTUATORS> homieNodes{};
     DeviceDetailsSnapshot pendingTopologyDetails{};  //!< Validated topology waiting to be persisted before a controlled reboot.
+
+    void capturePreviousBridgeBreadcrumb()
+    {
+#ifdef ESP32
+        const bool hasPreviousBreadcrumb = bridgeBreadcrumbsAreValid();
+        previousBridgeLoopPhase =
+            hasPreviousBreadcrumb ? static_cast<BridgeLoopPhase>(bridgeBreadcrumbLastPhase) : BridgeLoopPhase::Unknown;
+        previousBridgeLoopPhaseMs = hasPreviousBreadcrumb ? bridgeBreadcrumbLastMillis : 0U;
+        previousBridgeBootCount = hasPreviousBreadcrumb ? bridgeBreadcrumbBootCount : 0U;
+        bridgeBreadcrumbDiagnosticPending = hasPreviousBreadcrumb && previousBridgeLoopPhase != BridgeLoopPhase::Unknown;
+        initializeBridgeBreadcrumbs();
+#else
+        bridgeBreadcrumbDiagnosticPending = false;
+#endif
+    }
 
     void configureHomie() const
     {
@@ -361,6 +511,18 @@ public:
         {
             Homie.disableLedFeedback();
         }
+
+        if (options.disableResetTrigger)
+        {
+            Homie.disableResetTrigger();
+        }
+
+#ifdef ESP32
+        if (options.disableWifiSleep)
+        {
+            WiFi.setSleep(false);
+        }
+#endif
 
         if (shouldDisableLogging(options.loggingMode))
         {
@@ -691,6 +853,34 @@ public:
                                                  MqttTopicsBuilder::mqttOutBridgeTopic.c_str());
     }
 
+    [[nodiscard]] auto publishBridgeBreadcrumbDiagnostic() -> bool
+    {
+        if (!bridgeBreadcrumbDiagnosticPending)
+        {
+            return true;
+        }
+
+        if (!Homie.isConnected() || !hasBridgeTopic())
+        {
+            return false;
+        }
+
+        StaticJsonDocument<kBridgeBreadcrumbDocSize> diagnosticDocument;
+        diagnosticDocument[kBridgeDiagnosticEventKey] = kBridgeBreadcrumbEvent;
+        diagnosticDocument[kBridgeDiagnosticKindKey] = kBridgeBreadcrumbKind;
+        diagnosticDocument[kBridgeBreadcrumbPhaseKey] = bridgeLoopPhaseName(previousBridgeLoopPhase);
+        diagnosticDocument[kBridgeBreadcrumbPhaseMsKey] = previousBridgeLoopPhaseMs;
+        diagnosticDocument[kBridgeBreadcrumbBootCountKey] = previousBridgeBootCount;
+
+        if (!MqttPublisher::sendJson(diagnosticDocument, MqttTopicsBuilder::mqttOutBridgeTopic.c_str(), true, 1))
+        {
+            return false;
+        }
+
+        bridgeBreadcrumbDiagnosticPending = false;
+        return true;
+    }
+
     /**
      * @brief Publish one simple bridge-local diagnostic with no extra payload.
      * @details Used for low-cardinality lifecycle events such as topology
@@ -903,6 +1093,7 @@ public:
             {
                 allPublished = false;
             }
+            yield();
         }
 
         return allPublished;
@@ -920,6 +1111,7 @@ public:
                 {
                     allPublished = false;
                 }
+                yield();
             }
         }
 
@@ -1783,6 +1975,9 @@ void LSHBridge::begin()
         return;
     }
 
+    impl.capturePreviousBridgeBreadcrumb();
+    recordBridgeLoopPhase(BridgeLoopPhase::Begin);
+
     // Open the USB serial console before any debug log can fire. Without this
     // explicit initialization a debug build compiles the logging calls but the
     // bridge USB port would remain silent.
@@ -1790,8 +1985,13 @@ void LSHBridge::begin()
 
     activeInstance = this;
     timeKeeper::update();
+    recordBridgeLoopPhase(BridgeLoopPhase::BeginSerial);
     impl.controllerSerialLink.begin();
+    yield();
+    recordBridgeLoopPhase(BridgeLoopPhase::BeginCache);
     (void)impl.loadCachedDetailsFromFlash();
+    yield();
+    recordBridgeLoopPhase(BridgeLoopPhase::BeginConfigureHomie);
     impl.configureHomie();
     Homie.onEvent(onHomieEventStatic);
     impl.runtimeState.isControllerConnected = impl.controllerSerialLink.isConnected();
@@ -1799,9 +1999,12 @@ void LSHBridge::begin()
     auto runtimeDelegate = ControllerSerialLink::MessageCallback::create<Impl, &Impl::handleControllerSerialMessage>(impl);
     impl.controllerSerialLink.onMessage(runtimeDelegate);
 
+    recordBridgeLoopPhase(BridgeLoopPhase::BeginHomieSetup);
     Homie.setup();
     impl.isStarted = true;
+    recordBridgeLoopPhase(BridgeLoopPhase::BeginWaitingForDetails);
     impl.enterWaitingForDetails();
+    yield();
 
 #ifdef HOMIE_RESET
     if (Homie.isConfigured())
@@ -1810,6 +2013,8 @@ void LSHBridge::begin()
         Homie.setIdle(true);
     }
 #endif
+
+    recordBridgeLoopPhase(BridgeLoopPhase::LoopEnd);
 }
 
 /**
@@ -1823,28 +2028,52 @@ void LSHBridge::loop()
         return;
     }
 
+    recordBridgeLoopPhase(BridgeLoopPhase::LoopStart);
     timeKeeper::update();
+    recordBridgeLoopPhase(BridgeLoopPhase::HomieLoop);
     Homie.loop();
+    yield();
 
     if (impl.serial->available())
     {
+        recordBridgeLoopPhase(BridgeLoopPhase::SerialRx);
         impl.controllerSerialLink.processSerialBuffer();
+        yield();
     }
 
+    recordBridgeLoopPhase(BridgeLoopPhase::MqttQueue);
     impl.processQueuedMqttCommands();
+    yield();
+    recordBridgeLoopPhase(BridgeLoopPhase::ControllerConnectivity);
     impl.refreshControllerConnectivity();
+    yield();
+    recordBridgeLoopPhase(BridgeLoopPhase::MqttResync);
     impl.processPendingMqttResync();
+    yield();
+    recordBridgeLoopPhase(BridgeLoopPhase::Bootstrap);
     impl.processBootstrapProgress();
+    yield();
+    recordBridgeLoopPhase(BridgeLoopPhase::TopologyMigration);
     impl.processPendingTopologyMigration();
+    yield();
+    recordBridgeLoopPhase(BridgeLoopPhase::ActuatorBatch);
     impl.controllerSerialLink.processPendingActuatorBatch();
+    yield();
+    recordBridgeLoopPhase(BridgeLoopPhase::StatePublish);
     impl.processPendingStatePublishes();
+    yield();
+    recordBridgeLoopPhase(BridgeLoopPhase::BridgeDiagnostics);
     impl.publishPendingBridgeDiagnostics();
+    (void)impl.publishBridgeBreadcrumbDiagnostic();
+    yield();
+    recordBridgeLoopPhase(BridgeLoopPhase::SerialPing);
     if (!impl.controllerSerialLink.sendJson(constants::payloads::StaticType::PING_))
     {
         // A rejected heartbeat is harmless here: either the ping interval is
         // still closed or the UART refused the frame. In both cases the next
         // loop iteration will retry under the same normal pacing rules.
     }
+    recordBridgeLoopPhase(BridgeLoopPhase::LoopEnd);
 }
 
 /**

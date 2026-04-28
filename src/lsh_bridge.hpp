@@ -39,6 +39,14 @@ inline constexpr std::size_t BRIDGE_IMPL_STORAGE_SIZE = 3072U;
 static_assert(CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE > 0U, "CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE must be greater than zero.");
 inline constexpr std::size_t BRIDGE_IMPL_STORAGE_SIZE = CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE;
 #endif
+
+#ifndef CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER
+inline constexpr bool DEFAULT_DISABLE_RESET_TRIGGER = false;
+#else
+static_assert((CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER == 0) || (CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER == 1),
+              "CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER must be 0 or 1.");
+inline constexpr bool DEFAULT_DISABLE_RESET_TRIGGER = (CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER != 0);
+#endif
 }  // namespace detail
 
 /**
@@ -56,9 +64,11 @@ enum class LoggingMode : std::uint8_t
  */
 struct BridgeOptions
 {
-    HardwareSerial *serial = nullptr;                      //!< UART used for the controller link. `nullptr` selects `Serial2`.
-    bool disableLedFeedback = true;                        //!< Disable Homie LED feedback by default.
-    LoggingMode loggingMode = LoggingMode::AutoFromBuild;  //!< Runtime logging policy.
+    HardwareSerial *serial = nullptr;                                  //!< UART used for the controller link. `nullptr` selects `Serial2`.
+    bool disableLedFeedback = true;                                    //!< Disable Homie LED feedback by default.
+    bool disableResetTrigger = detail::DEFAULT_DISABLE_RESET_TRIGGER;  //!< Disable Homie's physical reset trigger.
+    bool disableWifiSleep = true;                                      //!< Disable ESP32 Wi-Fi modem sleep by default.
+    LoggingMode loggingMode = LoggingMode::AutoFromBuild;              //!< Runtime logging policy.
 };
 
 /**

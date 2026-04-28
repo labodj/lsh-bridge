@@ -142,6 +142,12 @@ and a conservative release environment for first bring-up.
   `CONFIG_HOMIE_FIRMWARE_NAME`, `CONFIG_HOMIE_FIRMWARE_VERSION` and
   `CONFIG_HOMIE_BRAND`
 - logging defaults to `AutoFromBuild`: logging is disabled in normal builds and stays enabled when `LSH_DEBUG` is defined
+- Homie's physical reset trigger remains enabled by default; unattended ESP32
+  bridge boards can disable it through `BridgeOptions::disableResetTrigger` or
+  `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER=1`
+- ESP32 Wi-Fi modem sleep is disabled by default through
+  `BridgeOptions::disableWifiSleep`; the bridge favors stable MQTT liveness over
+  low-power behavior
 - the bridge persists only validated controller `DEVICE_DETAILS` in ESP32 NVS; runtime actuator state always comes fresh from the controller
 
 This is not yet a fully generic bridge framework. It is a clean extraction of the current working runtime into a library-shaped repo.
@@ -181,7 +187,7 @@ Current supported knobs:
 - MQTT topics: `CONFIG_MQTT_TOPIC_BASE`, `CONFIG_MQTT_TOPIC_INPUT`, `CONFIG_MQTT_TOPIC_STATE`, `CONFIG_MQTT_TOPIC_CONF`, `CONFIG_MQTT_TOPIC_EVENTS`, `CONFIG_MQTT_TOPIC_BRIDGE`, `CONFIG_MQTT_TOPIC_SERVICE`
 - Homie convention and identity: `HOMIE_CONVENTION_VERSION=5`, `CONFIG_HOMIE_FIRMWARE_NAME`, `CONFIG_HOMIE_FIRMWARE_VERSION`, `CONFIG_HOMIE_BRAND`
 - liveness: `CONFIG_PING_INTERVAL_CONTROLLINO_MS`, `CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS`
-- runtime policy: `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS`, `CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS`, `CONFIG_TOPOLOGY_REBOOT_GRACE_MS`, `CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS`, `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY`, `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP`, `CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT`
+- runtime policy: `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS`, `CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS`, `CONFIG_TOPOLOGY_REBOOT_GRACE_MS`, `CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS`, `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY`, `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP`, `CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT`, `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER`
 - implementation storage: `CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE`
 - codecs and flags: `CONFIG_MSG_PACK_ARDUINO`, `CONFIG_MSG_PACK_MQTT`, `LSH_DEBUG`, `HOMIE_RESET`
 - ETL override hook: `LSH_ETL_PROFILE_OVERRIDE_HEADER`
