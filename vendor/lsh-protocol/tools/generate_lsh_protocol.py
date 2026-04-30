@@ -30,11 +30,13 @@ TARGET_BRIDGE = "bridge"
 VALID_TARGETS = {TARGET_CORE, TARGET_BRIDGE}
 CLI_TARGET_SHARED_DOC = "shared-doc"
 CLI_TARGET_NODE_RED = "node-red"
+CLI_TARGET_COORDINATOR = "coordinator"
 VALID_CLI_TARGETS = (
     CLI_TARGET_SHARED_DOC,
     TARGET_CORE,
     TARGET_BRIDGE,
     CLI_TARGET_NODE_RED,
+    CLI_TARGET_COORDINATOR,
 )
 CPP_IDENTIFIER_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 TS_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -578,9 +580,29 @@ def markdown_escape(value: str) -> str:
 def markdown_code_span(value: str) -> str:
     """Render inline code spans compatibly with older Doxygen Markdown parsers."""
 
-    if "'" in value or "`" in value:
+    if "`" in value:
         return f"``{value}``"
     return f"`{value}`"
+
+
+def markdown_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """Render a stable, Prettier-compatible Markdown table.
+
+    The generator keeps generated docs reproducible without depending on a Node
+    toolchain. Padding the table here makes the output pleasant to read in raw
+    Markdown and avoids formatter drift in repositories that do run Prettier.
+    """
+
+    widths = [
+        max(len(header), 3, *(len(row[index]) for row in rows))
+        for index, header in enumerate(headers)
+    ]
+
+    def render_row(values: Sequence[str]) -> str:
+        return "| " + " | ".join(value.ljust(widths[index]) for index, value in enumerate(values)) + " |"
+
+    separator = "| " + " | ".join("-" * width for width in widths) + " |"
+    return "\n".join([render_row(headers), separator, *(render_row(row) for row in rows)])
 
 
 def lower_camel_case(identifier: str) -> str:
@@ -813,20 +835,19 @@ export enum LshProtocol {{
 def render_protocol_markdown(spec: ProtocolSpec, golden_payloads: GoldenPayloads) -> str:
     """Render a human-readable Markdown protocol reference."""
 
-    key_rows = "\n".join(
-        "| "
-        + " | ".join(
+    key_table = markdown_table(
+        ("Constant", "Wire Key", "Meaning"),
+        tuple(
             (
                 markdown_code_span(name),
                 markdown_code_span(value),
                 markdown_escape(protocol_key_description(name)),
             )
-        )
-        + " |"
-        for name, value in spec.keys.items()
+            for name, value in spec.keys.items()
+        ),
     )
 
-    command_rows: list[str] = []
+    command_rows: list[tuple[str, str, str, str, str]] = []
     for command in spec.commands:
         example = golden_payloads.payloads.get(lower_camel_case(command.name))
         json_example = (
@@ -835,35 +856,44 @@ def render_protocol_markdown(spec: ProtocolSpec, golden_payloads: GoldenPayloads
             else ""
         )
         command_rows.append(
-            "| "
-            + " | ".join(
-                (
-                    str(command.value),
-                    markdown_code_span(command.cpp_name),
-                    markdown_code_span(command.ts_name),
-                    json_example,
-                    markdown_escape(command.description),
-                )
+            (
+                str(command.value),
+                markdown_code_span(command.cpp_name),
+                markdown_code_span(command.ts_name),
+                json_example,
+                markdown_escape(command.description),
             )
-            + " |"
         )
+    command_table = markdown_table(
+        ("Value", "C++", "TypeScript", "Golden JSON Example", "Description"),
+        tuple(command_rows),
+    )
 
-    click_rows = "\n".join(
-        "| "
-        + " | ".join(
+    click_table = markdown_table(
+        ("Value", "C++", "TypeScript"),
+        tuple(
             (
                 str(click_type.value),
                 markdown_code_span(click_type.cpp_name),
                 markdown_code_span(click_type.ts_name),
             )
-        )
-        + " |"
-        for click_type in spec.click_types
+            for click_type in spec.click_types
+        ),
     )
 
-    static_payload_rows = "\n".join(
-        "| "
-        + " | ".join(
+    static_payload_table = markdown_table(
+        (
+            "Name",
+            "Command",
+            "C++ Enum",
+            "C++ Symbol",
+            "Targets",
+            "JSON Raw Bytes",
+            "JSON Serial Bytes",
+            "MsgPack Raw Bytes",
+            "MsgPack Serial Bytes",
+        ),
+        tuple(
             (
                 markdown_code_span(payload.name),
                 markdown_code_span(payload.command),
@@ -883,9 +913,8 @@ def render_protocol_markdown(spec: ProtocolSpec, golden_payloads: GoldenPayloads
                     msgpack_serial_static_payload_literal(spec.command_by_name()[payload.command].value)
                 ),
             )
-        )
-        + " |"
-        for payload in spec.static_payloads
+            for payload in spec.static_payloads
+        ),
     )
 
     trust_lines = ""
@@ -921,42 +950,58 @@ def render_protocol_markdown(spec: ProtocolSpec, golden_payloads: GoldenPayloads
 
     return f"""# {spec.name}
 
-This document is auto-generated from `shared/lsh_protocol.json` by `tools/generate_lsh_protocol.py`.
-Do not edit it manually.
+This is the generated wire reference for LSH. It is the page to keep open when
+you need exact command IDs, compact JSON keys, golden payload examples, or the
+pre-serialized bytes used by firmware and bridge hot paths.
+
+The source of truth is `shared/lsh_protocol.json`; this file is generated by
+`tools/generate_lsh_protocol.py`. Do not edit it manually.
+
+Quick facts:
 
 - Spec revision: `{spec.spec_revision}`
 - Wire protocol major: `{spec.wire_protocol_major}`
 - Revision note: {spec.notes}
 - Wire goal: compact payloads with single-character keys and numeric command IDs
 
+How to read this page:
+
+- Start with the compatibility and transport sections when implementing a peer.
+- Use the JSON key and command tables when writing encoders or decoders.
+- Use the golden examples as sanity checks for tests and troubleshooting.
+- Use the static payload table only when you need the exact generated byte arrays.
+
 {trust_lines}{handshake_lines}{compatibility_lines}{transport_lines}{constraints_lines}## JSON Keys
 
-| Constant | Wire Key | Meaning |
-| --- | --- | --- |
-{key_rows}
+LSH uses compact single-character keys on the wire. Generated code may expose
+clearer constant names, but the payload itself must use the wire keys shown here.
+
+{key_table}
 
 ## Commands
 
-| Value | C++ | TypeScript | Golden JSON Example | Description |
-| --- | --- | --- | --- | --- |
-{chr(10).join(command_rows)}
+Every logical LSH payload has a command discriminator in the `p` key. The value
+is numeric on the wire; the C++ and TypeScript names are generated conveniences
+for each target repository.
+
+{command_table}
 
 ## Click Types
 
-| Value | C++ | TypeScript |
-| --- | --- | --- |
-{click_rows}
+Click types are used by network-click request, acknowledgement, confirmation,
+and failover payloads.
+
+{click_table}
 
 ## Pre-serialized Static Payloads
 
-These payloads are generated as compile-time byte arrays for zero-allocation hot paths.
-Each row shows both the logical raw payload bytes and the final serial transport bytes.
-The raw forms are used by transports that carry bare payloads, while the serial forms
-are already encoded exactly as they should appear on the controller link.
+These payloads are generated as compile-time byte arrays for zero-allocation hot
+paths. Each row shows both the logical raw payload bytes and the final serial
+transport bytes. The raw forms are used by transports that carry bare payloads,
+while the serial forms are already encoded exactly as they should appear on the
+controller link.
 
-| Name | Command | C++ Enum | C++ Symbol | Targets | JSON Raw Bytes | JSON Serial Bytes | MsgPack Raw Bytes | MsgPack Serial Bytes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-{static_payload_rows}
+{static_payload_table}
 """
 
 
@@ -978,6 +1023,7 @@ def generated_outputs(
     core_root: Path | None,
     bridge_root: Path | None,
     node_red_root: Path | None,
+    coordinator_root: Path | None,
 ) -> list[tuple[Path, str]]:
     """Return the generated files requested by the selected targets."""
 
@@ -1063,6 +1109,17 @@ def generated_outputs(
             )
             continue
 
+        if target == CLI_TARGET_COORDINATOR:
+            if coordinator_root is None:
+                raise SpecError("--coordinator-root is required when target 'coordinator' is selected.")
+            outputs.append(
+                (
+                    coordinator_root / "src" / "generated" / "protocol.ts",
+                    render_ts_protocol(spec),
+                )
+            )
+            continue
+
         raise SpecError(f"Unknown target '{target}'. Valid targets: {', '.join(VALID_CLI_TARGETS)}.")
 
     return outputs
@@ -1090,6 +1147,7 @@ def run(
     core_root: Path | None,
     bridge_root: Path | None,
     node_red_root: Path | None,
+    coordinator_root: Path | None,
 ) -> int:
     """Generate the files or verify that generated files are already up to date."""
 
@@ -1106,6 +1164,7 @@ def run(
         core_root=core_root,
         bridge_root=bridge_root,
         node_red_root=node_red_root,
+        coordinator_root=coordinator_root,
     ):
         if check_only:
             current = path.read_text(encoding="utf-8") if path.exists() else None
@@ -1167,6 +1226,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         type=Path,
         help="root directory of the node-red-contrib-lsh-logic repository",
     )
+    parser.add_argument(
+        "--coordinator-root",
+        type=Path,
+        help="root directory of the labo-smart-home-coordinator repository",
+    )
     return parser.parse_args(argv)
 
 
@@ -1183,6 +1247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             core_root=args.core_root.resolve() if args.core_root else None,
             bridge_root=args.bridge_root.resolve() if args.bridge_root else None,
             node_red_root=args.node_red_root.resolve() if args.node_red_root else None,
+            coordinator_root=args.coordinator_root.resolve() if args.coordinator_root else None,
         )
     except SpecError as exc:
         print(f"error: {exc}", file=sys.stderr)

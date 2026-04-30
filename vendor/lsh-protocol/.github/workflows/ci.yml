@@ -1,0 +1,92 @@
+name: CI & Release
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-generated-shared-doc:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Validate generated shared documentation
+        run: python3 tools/generate_lsh_protocol.py --check
+
+  lint-markdown:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Lint Markdown
+        run: npx --yes markdownlint-cli2@0.22.1
+
+  smoke-test-all-target-generators:
+    needs: validate-generated-shared-doc
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Smoke-test all generator targets
+        run: |
+          python3 tools/generate_lsh_protocol.py \
+            --target shared-doc \
+            --target core \
+            --target bridge \
+            --target node-red \
+            --target coordinator \
+            --shared-doc-root "${RUNNER_TEMP}/shared-doc" \
+            --core-root "${RUNNER_TEMP}/lsh-core" \
+            --bridge-root "${RUNNER_TEMP}/lsh-bridge" \
+            --node-red-root "${RUNNER_TEMP}/node-red-contrib-lsh-logic" \
+            --coordinator-root "${RUNNER_TEMP}/labo-smart-home-coordinator"
+
+  release:
+    needs:
+      - validate-generated-shared-doc
+      - lint-markdown
+      - smoke-test-all-target-generators
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: lsh-protocol ${{ github.ref_name }}
+          generate_release_notes: true

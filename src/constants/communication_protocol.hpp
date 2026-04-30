@@ -28,7 +28,7 @@ namespace lsh::bridge
 {
     namespace protocol
     {
-        inline constexpr uint32_t SPEC_REVISION = 2026042001U; //!< Code-only revision, never transmitted on wire.
+        inline constexpr uint32_t SPEC_REVISION = 2026043001U; //!< Code-only revision, never transmitted on wire.
         inline constexpr uint8_t WIRE_PROTOCOL_MAJOR = 3U; //!< Handshake-only protocol major, transmitted only in DEVICE_DETAILS.
 
         // === JSON KEYS ===

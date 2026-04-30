@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "LSH Protocol",
-    "specRevision": 2026042001,
+    "specRevision": 2026043001,
     "wireProtocolMajor": 3,
     "notes": "Code-only revision. Never transmitted on wire.",
     "documentation": {
