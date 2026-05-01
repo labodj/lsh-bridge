@@ -1,110 +1,102 @@
-# lsh-bridge
+# lsh-bridge: ESP32 Bridge for Labo Smart Home
 
 [![PlatformIO Registry](https://badges.registry.platformio.org/packages/labodj/library/lsh-bridge.svg)](https://registry.platformio.org/libraries/labodj/lsh-bridge)
 [![CI](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Flabodj%2Flsh-bridge%2Factions%2Fworkflows%2Fci.yml%2Fruns%3Fper_page%3D1&query=%24.workflow_runs%5B0%5D.conclusion&label=CI)](https://github.com/labodj/lsh-bridge/actions/workflows/ci.yml)
 [![Latest Release](https://img.shields.io/github/release/labodj/lsh-bridge.svg)](https://github.com/labodj/lsh-bridge/releases/latest)
 [![License](https://img.shields.io/github/license/labodj/lsh-bridge.svg)](https://github.com/labodj/lsh-bridge/blob/main/LICENSE)
 
-`lsh-bridge` is the reusable library form of the LSH ESP bridge runtime.
+`lsh-bridge` is the ESP32 side of the **Labo Smart Home** controller path. It talks to
+an `lsh-core` controller over UART, exposes the controller model over MQTT and Homie,
+and keeps the network-facing runtime synchronized with the physical panel.
 
-The `main` branch may move ahead between tagged releases. If you are embedding
-the library in a downstream project, prefer released tags over `main` unless
-you are intentionally coordinating unreleased work across the public LSH repos.
+The best documented path is one bridge per controller: a Controllino-style AVR device
+running `lsh-core`, an ESP32 running `lsh-bridge`, an MQTT broker, and the LSH
+coordinator or Node-RED logic layer above it.
 
-If you are new to the public LSH stack, read the landing repository and the
-reference profile first:
+If you are new to LSH as a whole, start with the
+[`labo-smart-home` documentation map](https://github.com/labodj/labo-smart-home/blob/main/DOCS.md)
+before changing bridge settings.
 
-- [Labo Smart Home landing page](https://github.com/labodj/labo-smart-home)
-- [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
-- [LSH glossary](https://github.com/labodj/labo-smart-home/blob/main/GLOSSARY.md)
+The `main` branch can move ahead of tagged releases. For downstream projects, prefer
+released tags unless you are intentionally testing coordinated unreleased work across
+the LSH repos.
 
-## Start Here
+## What lsh-bridge Owns
 
-Use this README according to your goal:
+`lsh-bridge` is intentionally narrow:
 
-- If you are new to the public stack, read the landing page, reference stack and glossary first.
-- If you want the shortest answers to adoption questions, skim the landing [`FAQ.md`](https://github.com/labodj/labo-smart-home/blob/main/FAQ.md).
-- If you want the shortest end-to-end bring-up path, read the landing [`GETTING_STARTED.md`](https://github.com/labodj/labo-smart-home/blob/main/GETTING_STARTED.md) before changing bridge settings.
-- If your first lab is alive on MQTT but confusing in behavior, use the landing [`TROUBLESHOOTING.md`](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md).
-- If you want the bridge runtime model, start with [What the library does](#what-the-library-does).
-- If you want the exact runtime behaviors, read [docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
-- If you want the compile-time tuning surface, read [docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md).
-- If you want to embed the library quickly, jump to [Public API](#public-api) and the bundled example.
+- it reads and writes the controller serial protocol
+- it rebuilds the MQTT and Homie model from controller `DEVICE_DETAILS`
+- it publishes controller state, events and bridge diagnostics
+- it coalesces actuator command bursts before sending `SET_STATE` to the controller
+- it keeps a validated controller topology cache in ESP32 NVS
+- it asks the controller to resync after boot, MQTT recovery or topology changes
 
-The goal of this repo is narrow and pragmatic:
+The bridge does not own field I/O. Buttons, relays, indicators and local fallback remain
+controller responsibilities.
 
-- keep the runtime bridge logic that already works
-- expose it through a small library facade
-- leave deployment-specific PlatformIO tuning, branding and firmware wiring to the embedding project
+## What You Need
 
-The library keeps the bridge runtime behind a small public API.
+For the documented bridge path:
 
-## What the library does
+- PlatformIO
+- an ESP32 board supported by `pioarduino/platform-espressif32`
+- a controller running `lsh-core`
+- a hardware UART between controller and ESP32
+- a 5 V / 3.3 V level shifter when the controller UART is 5 V
+- an MQTT broker; the bridge publishes Homie discovery from the controller topology
 
-The library runs an ESP32 bridge between:
+The bridge is optimized for a static controller topology. It can recover from a changed
+topology, but that change is still expected to come from reflashing or rebooting the
+controller, not from devices appearing dynamically at runtime.
 
-- an LSH serial controller such as a Controllino or Arduino running `lsh-core`
-- an MQTT broker
-- the Homie device model exposed on top of MQTT
+## First Build
 
-At runtime it:
+The quickest working reference is the bundled PlatformIO example:
 
-- restores the last validated `DEVICE_DETAILS` snapshot from NVS when available
-- starts Homie immediately and advances controller sync in the main loop through a non-blocking `details -> state` flow
-- creates one Homie node per actuator declared by the controller
-- keeps an authoritative compact LSH state topic in sync
-- coalesces actuator command bursts before writing `SET_STATE` back to the controller
-- drops unstable actuator command storms once one batch exceeds the configured safety limits
-- publishes controller-backed runtime traffic on MQTT `events` and bridge-local runtime traffic on MQTT `bridge`
-- re-synchronizes the runtime model when MQTT becomes ready again
-- treats MQTT device-topic `PING` as controller-backed reachability only when the controller link is alive and synchronized
-- treats MQTT service-topic `PING` as a bridge-local probe answered on `bridge` whenever a validated device identity exists, and MQTT service-topic `BOOT` as a bridge-local resync trigger toward the controller
-- persists a changed controller topology and performs one controlled reboot so MQTT topics and Homie nodes are rebuilt from a coherent snapshot
-
-## Typical Hardware Topology
-
-In the real LSH installation, `lsh-bridge` is typically paired one-to-one with a **Controllino Maxi** inside an electrical panel.
-
-```text
-12/24 VDC power supply
-        |
-        +-------------------------------> Controllino / lsh-core device
-        |
-        +--> 5 V buck converter -------> ESP32 / lsh-bridge
-
-Controllino front TTL serial
-        |
-        +--> 5 V / 3.3 V logic level shifter --> ESP32 UART
-
-Common ground shared by controller, buck converter, level shifter and ESP32.
+```bash
+platformio run -d examples/basic-homie-bridge -e release
 ```
 
-Practical notes from the live installation:
+The example also keeps CI-backed variants for codec and optimization coverage:
 
-- the bridge talks to the controller over the Controllino front TTL interface, not over USB
-- when the controller side is 5 V logic and the ESP32 side is 3.3 V logic, a level shifter is required on the UART path
-- the ESP32 is powered from a dedicated 5 V rail derived from the same 12/24 V source used by the controller
-- controller-to-bridge wiring in production panels uses solid connectorized links
-- some panels expose short USB extension cables outside the enclosure so bridge firmware can be flashed without reopening internal wiring
+- `release`: conservative first build
+- `release_aggressive`: closer to the optimized deployment style
+- `release_json_serial`: JSON on the controller UART
+- `release_msgpack_mqtt`: MessagePack on serial and MQTT
+- `release_json_serial_msgpack_mqtt`: JSON on serial, MessagePack on MQTT
 
-This repo stays focused on the reusable bridge runtime, but the hardware context matters because it explains why the bridge is intentionally narrow: serial in, MQTT/Homie out, no ownership of the field I/O itself.
+Keep the `release` profile for the first bring-up. Change codecs, topic names or
+capacity limits after the controller, bridge and MQTT path have worked once together.
 
-For a system-level view of the installation pattern, see the public landing repo hardware notes:
-[Labo Smart Home hardware overview](https://github.com/labodj/labo-smart-home/blob/main/HARDWARE_OVERVIEW.md)
+## Embed the Library
 
-For the cross-repo runtime story, topic model and `BOOT` / `PING` profile used
-by the public stack, see:
-[LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
+Install from the PlatformIO Registry:
 
-## Public API
+```ini
+lib_deps =
+    labodj/lsh-bridge@^1.4.1
+```
 
-The public surface is intentionally small:
+The embedding firmware owns board choice, serial pins, topic names, firmware identity
+and deployment policy. A minimal Arduino entry point looks like this:
 
 ```cpp
+#include <Arduino.h>
 #include <lsh_bridge.hpp>
 
-lsh::bridge::BridgeOptions options;
-lsh::bridge::LSHBridge bridge(options);
+namespace {
+
+lsh::bridge::BridgeOptions makeBridgeOptions() {
+  lsh::bridge::BridgeOptions options;
+  options.serial = &Serial2;
+  options.disableLedFeedback = true;
+  return options;
+}
+
+lsh::bridge::LSHBridge bridge(makeBridgeOptions());
+
+}  // namespace
 
 void setup() {
   bridge.begin();
@@ -115,148 +107,102 @@ void loop() {
 }
 ```
 
-See [examples/basic-homie-bridge/src/main.cpp](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/src/main.cpp).
+Leaving `BridgeOptions::serial` unset resolves to `Serial2`. The other defaults disable
+Homie LED feedback, keep ESP32 Wi-Fi modem sleep disabled and use build-driven logging.
+Set the options explicitly when you want the firmware entry point to document those
+choices.
 
-## Bundled Example
+The full example lives in
+[examples/basic-homie-bridge](https://github.com/labodj/lsh-bridge/tree/main/examples/basic-homie-bridge).
 
-The fastest concrete starting point in this repository is:
+## Hardware Integration
 
-- [examples/basic-homie-bridge](https://github.com/labodj/lsh-bridge/tree/main/examples/basic-homie-bridge)
+In the public panel pattern, the ESP32 bridge is paired one-to-one with the controller:
 
-That example already carries the public topic profile, the default service topic
-and a conservative release environment for first bring-up.
+```text
+12/24 VDC supply
+        |
+        +-------------------------------> Controllino / lsh-core
+        |
+        +--> 5 V buck converter -------> ESP32 / lsh-bridge
 
-## Design notes
+Controller TTL UART
+        |
+        +--> 5 V / 3.3 V level shifter --> ESP32 UART
 
-- the library currently assumes a single active bridge instance
-- Homie remains part of the opinionated runtime surface for now
-- runtime command handling and bridge-local diagnostics are documented in
-  [docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md)
-- compile-time `CONFIG_*` knobs are supported and documented in
-  [docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md)
-- the protocol source of truth remains vendored as `vendor/lsh-protocol`
-- Homie is built only in v5 mode: the embedding PlatformIO environment must set
-  `HOMIE_CONVENTION_VERSION=5`, which publishes discovery as a retained
-  `homie/5/<device>/$description` document
-- Homie firmware identity is configured at compile time through
-  `CONFIG_HOMIE_FIRMWARE_NAME`, `CONFIG_HOMIE_FIRMWARE_VERSION` and
-  `CONFIG_HOMIE_BRAND`
-- logging defaults to `AutoFromBuild`: logging is disabled in normal builds and stays enabled when `LSH_DEBUG` is defined
-- Homie's physical reset trigger remains enabled by default; unattended ESP32
-  bridge boards can disable it through `BridgeOptions::disableResetTrigger` or
-  `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER=1`
-- ESP32 Wi-Fi modem sleep is disabled by default through
-  `BridgeOptions::disableWifiSleep`; the bridge favors stable MQTT liveness over
-  low-power behavior
-- the bridge persists only validated controller `DEVICE_DETAILS` in ESP32 NVS; runtime actuator state always comes fresh from the controller
+Common ground shared by controller, buck converter, level shifter and ESP32.
+```
 
-This is not yet a fully generic bridge framework. It is a clean extraction of the current working runtime into a library-shaped repo.
+The bridge usually talks to the controller through a hardware UART, not through USB. On
+Controllino-style panels, the controller side is 5 V logic and the ESP32 side is 3.3 V
+logic, so the UART path needs a proper level shifter.
 
-## Integration responsibilities
+For panel-level power and wiring context, read the
+[Labo Smart Home hardware overview](https://github.com/labodj/labo-smart-home/blob/main/HARDWARE_OVERVIEW.md).
 
-The embedding project should own:
+## Runtime Shape
 
-- the PlatformIO environment
-- firmware identity and release/versioning policy
-- serial pin overrides and other `CONFIG_*` choices
-- validation of board settings, partition layout and full-flash artifacts when the ESP32 platform changes
-- OTA and deployment tooling
-- any project-specific examples and board matrix
+```text
++-------------+    serial    +------------+    MQTT    +--------------+
+| lsh-core    | <----------> | lsh-bridge | <--------> | coordinator  |
+| controller  |              | ESP32      |            | or Node-RED  |
++-------------+              +------------+            +--------------+
+```
 
-## Compile-time Configuration
+Runtime rules:
 
-`lsh-bridge` exposes a deliberate build-time surface for capacities, serial
-wiring, MQTT topic naming, liveness timers and codec selection.
+- the controller remains authoritative for actuator state
+- the bridge caches only validated topology, never runtime actuator state
+- startup uses cached topology when available, then asks the controller for fresh
+  details and state
+- device-topic `PING` answers controller reachability only when the runtime is synced
+- service-topic `PING` answers bridge reachability on the bridge-local topic
+- topology changes are saved to NVS and followed by one controlled reboot
+- retained, fragmented, oversize or malformed MQTT commands are rejected and diagnosed
 
-The full reference lives in
-[docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md).
-Runtime-only behaviors such as actuator command coalescing, unstable command
-storm protection, inbound MQTT queue backpressure and bridge-local MQTT
-diagnostics such as `mqtt_queue_overflow`, `mqtt_command_rejected` and
-`homie_command_rejected` are documented separately in
+For the detailed runtime story, read
 [docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
-The bundled
-[example `platformio.ini`](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/platformio.ini)
-explicitly sets the supported value macros and leaves optional behavior flags
-commented.
 
-Current supported knobs:
+## Configuration
+
+Most bridge choices are compile-time PlatformIO flags because they affect fixed buffers,
+topic sizes, protocol codecs or Homie identity. The most common groups are:
 
 - capacities: `CONFIG_MAX_ACTUATORS`, `CONFIG_MAX_BUTTONS`, `CONFIG_MAX_NAME_LENGTH`
-- serial: `CONFIG_ARDCOM_SERIAL_RX_PIN`, `CONFIG_ARDCOM_SERIAL_TX_PIN`, `CONFIG_ARDCOM_SERIAL_BAUD`, `CONFIG_ARDCOM_SERIAL_TIMEOUT_MS`, `CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS`, `CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP`
-- MQTT topics: `CONFIG_MQTT_TOPIC_BASE`, `CONFIG_MQTT_TOPIC_INPUT`, `CONFIG_MQTT_TOPIC_STATE`, `CONFIG_MQTT_TOPIC_CONF`, `CONFIG_MQTT_TOPIC_EVENTS`, `CONFIG_MQTT_TOPIC_BRIDGE`, `CONFIG_MQTT_TOPIC_SERVICE`
-- Homie convention and identity: `HOMIE_CONVENTION_VERSION=5`, `CONFIG_HOMIE_FIRMWARE_NAME`, `CONFIG_HOMIE_FIRMWARE_VERSION`, `CONFIG_HOMIE_BRAND`
-- liveness: `CONFIG_PING_INTERVAL_CONTROLLINO_MS`, `CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS`
-- runtime policy: `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS`, `CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS`, `CONFIG_TOPOLOGY_REBOOT_GRACE_MS`, `CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS`, `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY`, `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP`, `CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS`, `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT`, `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER`
-- implementation storage: `CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE`
-- codecs and flags: `CONFIG_MSG_PACK_ARDUINO`, `CONFIG_MSG_PACK_MQTT`, `LSH_DEBUG`, `HOMIE_RESET`
-- ETL override hook: `LSH_ETL_PROFILE_OVERRIDE_HEADER`
+- serial: `CONFIG_ARDCOM_SERIAL_RX_PIN`, `CONFIG_ARDCOM_SERIAL_TX_PIN`,
+  `CONFIG_ARDCOM_SERIAL_BAUD`
+- MQTT topics: `CONFIG_MQTT_TOPIC_BASE`, `CONFIG_MQTT_TOPIC_EVENTS`,
+  `CONFIG_MQTT_TOPIC_BRIDGE`, `CONFIG_MQTT_TOPIC_SERVICE`
+- Homie: `HOMIE_CONVENTION_VERSION=5`, `CONFIG_HOMIE_FIRMWARE_NAME`,
+  `CONFIG_HOMIE_FIRMWARE_VERSION`, `CONFIG_HOMIE_BRAND`
+- runtime policy: queue capacity, command coalescing windows, topology reboot timing and
+  reset-trigger policy
+- codecs: `CONFIG_MSG_PACK_ARDUINO` and `CONFIG_MSG_PACK_MQTT`
 
-The bundled example also includes a ready-to-use project-local ETL override
-header at
-[examples/basic-homie-bridge/include/lsh_etl_profile_override.h](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/include/lsh_etl_profile_override.h).
+Use the bundled example as the starting point. The complete reference lives in
+[docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md).
 
-## Development
+## Documentation
 
-The bundled example project lives in [examples/basic-homie-bridge](https://github.com/labodj/lsh-bridge/tree/main/examples/basic-homie-bridge).
-
-The example exposes these CI-backed build profiles:
-
-- `release`: conservative and simple, suitable as a library smoke test
-- `release_aggressive`: mirrors the original bridge firmware optimization style more closely
-- `release_json_serial`: JSON on the controller serial link, JSON on MQTT
-- `release_msgpack_mqtt`: MsgPack on the controller serial link and MQTT
-- `release_json_serial_msgpack_mqtt`: JSON on serial, MsgPack on MQTT
-
-To verify the vendored protocol stays aligned:
-
-```bash
-python3 tools/update_lsh_protocol.py --check
-```
-
-## Updating Vendored Protocol
-
-`lsh-protocol` is vendored in this repo under `vendor/lsh-protocol` via `git subtree`.
-
-Typical update flow after pushing changes to `lsh-protocol`:
-
-```bash
-git remote add lsh-protocol git@github.com:labodj/lsh-protocol.git || \
-git remote set-url lsh-protocol git@github.com:labodj/lsh-protocol.git
-git fetch lsh-protocol
-git subtree pull --prefix=vendor/lsh-protocol lsh-protocol main --squash
-python3 tools/update_lsh_protocol.py
-python3 tools/update_lsh_protocol.py --check
-```
-
-The subtree update refreshes the vendored source-of-truth copy. The local wrapper then regenerates
-the bridge-specific outputs under `src/constants/`.
-
-## Library boundaries
-
-Inside the library:
-
-- `ControllerSerialLink`
-- `VirtualDevice`
-- `MqttTopicsBuilder`
-- `LSHNode`
-- `LSHBridge`
-
-Still intentionally compile-time configured:
-
-- topic strings
-- serial pins and baud
-- codec selection
-- limits for actuators, buttons and device name size
+- [DOCS.md](https://github.com/labodj/lsh-bridge/blob/main/DOCS.md): repository
+  documentation map
+- [docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md):
+  startup, sync, diagnostics and MQTT behavior
+- [docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md):
+  build flags and capacity policy
+- [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md):
+  cross-repo runtime model
 
 ## Compatibility
 
 Validated target:
 
 - ESP32
+- Arduino framework
 - `pioarduino/platform-espressif32`
+- Homie convention v5
 
-Recommended PlatformIO configuration:
+Recommended PlatformIO platform:
 
 ```ini
 platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
@@ -264,16 +210,18 @@ framework = arduino
 board = esp32dev
 ```
 
-`stable` is a moving release alias. The exact Arduino core / ESP-IDF toolchain
-behind it can change over time, so each `lsh-bridge` release should be validated
-against the current `stable` platform release before deployment.
+`stable` is a moving platform alias. Validate every `lsh-bridge` release against the
+current platform before deployment.
 
-`lsh-bridge` itself cannot pin the PlatformIO platform version for downstream
-integrations. That choice belongs to the embedding project.
+OTA updates only the application image (`firmware.bin`). It does not update bootloader,
+partition table or other full-flash artifacts. If the ESP32 platform update changes
+those artifacts, validate them explicitly and use a full USB/serial flash when required.
 
-OTA updates only the application image (`firmware.bin`). It does not update the
-bootloader, partition table or other full-flash artifacts. If the ESP32 platform
-update changes those artifacts, validate them explicitly and use a full USB/serial
-flash when required.
+ESP8266 compatibility is not a design goal of this repository.
 
-ESP8266 compatibility is not a design goal of this repo.
+## Maintainer Notes
+
+Maintainer workflow notes live in
+[DOCS.md](https://github.com/labodj/lsh-bridge/blob/main/DOCS.md#maintainer-notes).
+Package smoke and release publishing use `platformio pkg pack`, so exported Markdown
+uses absolute links rather than repository-relative links.

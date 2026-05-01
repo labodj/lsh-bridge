@@ -1,181 +1,190 @@
 # Compile-time Configuration
 
-`lsh-bridge` keeps a deliberately small but important compile-time surface. All supported knobs are ordinary C/C++ preprocessor macros passed through PlatformIO `build_flags`.
+`lsh-bridge` is built for small ESP32 firmware images, fixed buffers and predictable
+runtime behavior. That is why capacities, topic names, serial settings, codecs and Homie
+identity are compile-time choices passed through PlatformIO `build_flags`.
 
-The bundled example in [`examples/basic-homie-bridge/platformio.ini`](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/platformio.ini) sets all value-like macros explicitly and leaves the behavior-changing flags commented.
+Start from the bundled
+[basic Homie bridge example](https://github.com/labodj/lsh-bridge/tree/main/examples/basic-homie-bridge)
+and change one category at a time. For runtime behavior, startup semantics and
+diagnostics, read
+[docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
 
-If you are new to the public stack, read these first:
+## First Bring-up Baseline
 
-- [Labo Smart Home landing page](https://github.com/labodj/labo-smart-home)
-- [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
-- [LSH getting started guide](https://github.com/labodj/labo-smart-home/blob/main/GETTING_STARTED.md)
-- [LSH troubleshooting guide](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md)
+For a first bring-up:
 
-Use this page when you need exact macro ownership, not the runtime story. For
-runtime behavior, diagnostics and startup semantics, read
-[runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
-
-## Safe First-Lab Defaults
-
-For a first bring-up, the least painful strategy is:
-
-- start from the bundled example unchanged
+- build the bundled `release` environment unchanged
 - keep the stock topic layout and service topic
-- keep the stock codec choices until the end-to-end path works once
-- make capacities large enough for the controller you actually flashed
-- match serial baud exactly with `lsh-core`
+- keep the stock codec choices until the controller-to-MQTT path works once
+- make capacities large enough for the controller profile flashed into `lsh-core`
+- match serial baud exactly with the controller
 
-Most "mysterious" first-lab problems are not mysterious at all. They come from
-changing more than one of those at the same time.
+Most first bring-up surprises come from changing several of those at the same time. Get
+one predictable successful boot first, then tune deliberately.
 
-## Capacity and validation
+## Capacity and Validation
 
-| Macro | Default | What it affects |
-| --- | --- | --- |
-| `CONFIG_MAX_ACTUATORS` | `12U` | Maximum actuators accepted from the controller. Sizes static ETL containers, packed state buffers and JSON documents. |
-| `CONFIG_MAX_BUTTONS` | `12U` | Maximum buttons/clickables accepted from the controller. Sizes validation and JSON buffers. |
-| `CONFIG_MAX_NAME_LENGTH` | `4U` | Maximum device name length accepted from the controller. Also contributes to MQTT topic buffer sizing. |
+| Macro                    | Default | What it affects                                                                                         |
+| ------------------------ | ------- | ------------------------------------------------------------------------------------------------------- |
+| `CONFIG_MAX_ACTUATORS`   | `12U`   | Maximum actuators accepted from the controller; sizes static ETL containers, state buffers and payloads |
+| `CONFIG_MAX_BUTTONS`     | `12U`   | Maximum buttons or clickables accepted from the controller                                              |
+| `CONFIG_MAX_NAME_LENGTH` | `4U`    | Maximum controller device-name length; also contributes to MQTT topic buffer sizing                     |
 
-These limits are not cosmetic. If the controller reports more actuators/buttons than compiled, or a device name longer than `CONFIG_MAX_NAME_LENGTH`, the bridge rejects the payload.
+These limits are part of validation, not presentation. If the controller reports more
+resources than the bridge was compiled for, or a longer device name than
+`CONFIG_MAX_NAME_LENGTH`, the bridge rejects the topology.
 
-## Serial bridge settings
+## Serial Bridge Settings
 
-| Macro | Default | What it affects |
-| --- | --- | --- |
-| `CONFIG_ARDCOM_SERIAL_RX_PIN` | `16U` | RX pin used by `ControllerSerialLink::begin()`. |
-| `CONFIG_ARDCOM_SERIAL_TX_PIN` | `17U` | TX pin used by `ControllerSerialLink::begin()`. |
-| `CONFIG_ARDCOM_SERIAL_BAUD` | `250000U` | UART baud rate between ESP and controller. |
-| `CONFIG_ARDCOM_SERIAL_TIMEOUT_MS` | `5U` | Compatibility fallback used as the default value for `CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS`. |
-| `CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS` | `CONFIG_ARDCOM_SERIAL_TIMEOUT_MS` | Maximum silence while a serial MsgPack frame is still incomplete. Only used when serial uses MessagePack. |
-| `CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP` | `SERIAL_RX_BUFFER_SIZE` in JSON mode, `SERIAL_RX_MAX_FRAMED_MESSAGE_SIZE` in MsgPack mode | Maximum raw UART bytes consumed by one `ControllerSerialLink::processSerialBuffer()` call before the bridge loop returns to other work. |
+| Macro                                                | Default                           | What it affects                                                     |
+| ---------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------- |
+| `CONFIG_ARDCOM_SERIAL_RX_PIN`                        | `16U`                             | ESP32 RX pin used by `ControllerSerialLink::begin()`                |
+| `CONFIG_ARDCOM_SERIAL_TX_PIN`                        | `17U`                             | ESP32 TX pin used by `ControllerSerialLink::begin()`                |
+| `CONFIG_ARDCOM_SERIAL_BAUD`                          | `250000U`                         | UART baud rate between ESP32 and controller                         |
+| `CONFIG_ARDCOM_SERIAL_TIMEOUT_MS`                    | `5U`                              | Compatibility fallback for the MsgPack frame-idle timeout           |
+| `CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS` | `CONFIG_ARDCOM_SERIAL_TIMEOUT_MS` | Silence timeout used to discard one incomplete serial MsgPack frame |
+| `CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP`         | mode-derived                      | Raw UART byte budget consumed by one serial-processing pass         |
 
-Internally the bridge keeps two different serial-related size classes:
+Internally the bridge keeps two serial size classes:
 
-- `SERIAL_RX_BUFFER_SIZE`: sized for one complete inbound controller payload
-- `SERIAL_MAX_RX_BYTES_PER_LOOP`: fairness budget for one bridge loop iteration, sized to one worst-case escaped serial frame by default in MsgPack mode
+- `SERIAL_RX_BUFFER_SIZE`: enough for one complete inbound controller payload
+- `SERIAL_MAX_RX_BYTES_PER_LOOP`: fairness budget for one bridge loop iteration
 
-These are derived automatically from the controller topology limits above and are not public `CONFIG_*` knobs.
+Those values are derived from capacity limits and the selected codec. They are not
+public `CONFIG_*` knobs.
 
-## MQTT topic layout
+## MQTT Topic Layout
 
-| Macro | Default | What it affects |
-| --- | --- | --- |
-| `CONFIG_MQTT_TOPIC_BASE` | `"LSH"` | Root prefix for device-scoped topics. |
-| `CONFIG_MQTT_TOPIC_INPUT` | `"IN"` | Topic suffix subscribed for device-specific inbound commands. |
-| `CONFIG_MQTT_TOPIC_STATE` | `"state"` | Topic suffix used for authoritative state publishes. |
-| `CONFIG_MQTT_TOPIC_CONF` | `"conf"` | Topic suffix used for device configuration publishes. |
-| `CONFIG_MQTT_TOPIC_EVENTS` | `"events"` | Topic suffix used for controller-backed runtime events such as click traffic and device-level `PING` replies. |
-| `CONFIG_MQTT_TOPIC_BRIDGE` | `"bridge"` | Topic suffix used for bridge-local runtime events such as service-level ping replies and diagnostics. |
-| `CONFIG_MQTT_TOPIC_SERVICE` | `"LSH/Node-RED/SRV"` | Broadcast/service topic subscribed independently from the device name. |
+| Macro                       | Default              | What it affects                                                         |
+| --------------------------- | -------------------- | ----------------------------------------------------------------------- |
+| `CONFIG_MQTT_TOPIC_BASE`    | `"LSH"`              | Root prefix for device-scoped topics                                    |
+| `CONFIG_MQTT_TOPIC_INPUT`   | `"IN"`               | Device-specific inbound command suffix                                  |
+| `CONFIG_MQTT_TOPIC_STATE`   | `"state"`            | Authoritative compact state publish suffix                              |
+| `CONFIG_MQTT_TOPIC_CONF`    | `"conf"`             | Controller topology/configuration publish suffix                        |
+| `CONFIG_MQTT_TOPIC_EVENTS`  | `"events"`           | Controller-backed runtime events, including device-level `PING` replies |
+| `CONFIG_MQTT_TOPIC_BRIDGE`  | `"bridge"`           | Bridge-local diagnostics and service-level replies                      |
+| `CONFIG_MQTT_TOPIC_SERVICE` | `"LSH/Node-RED/SRV"` | Broadcast/service topic subscribed independently from device name       |
 
-The bridge derives topic buffer sizes automatically from the compiled strings above plus `CONFIG_MAX_NAME_LENGTH`. There are no public `CONFIG_MQTT_*_LENGTH` knobs in the current library.
+Topic buffer sizes are derived from these strings plus `CONFIG_MAX_NAME_LENGTH`. The
+current library does not expose public `CONFIG_MQTT_*_LENGTH` knobs.
 
-## Homie convention and identity
+## Homie Convention and Identity
 
-| Macro | Default | What it affects |
-| --- | --- | --- |
-| `HOMIE_CONVENTION_VERSION` | required `5` | Selects the Homie MQTT convention compiled by the `labodj/homie-v5` PlatformIO package. `lsh-bridge` now requires v5 so discovery is published under `homie/5/<device>/$description`. |
-| `CONFIG_HOMIE_FIRMWARE_NAME` | `"lsh-homie"` | Firmware name exposed through Homie. |
-| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.4.1"` | Firmware version exposed through Homie. |
-| `CONFIG_HOMIE_BRAND` | `"LaboSmartHome"` | Homie brand string exposed by the bridge. |
+| Macro                           | Default           | What it affects                                               |
+| ------------------------------- | ----------------- | ------------------------------------------------------------- |
+| `HOMIE_CONVENTION_VERSION`      | required `5`      | Homie convention compiled by the `labodj/homie-v5` dependency |
+| `CONFIG_HOMIE_FIRMWARE_NAME`    | `"lsh-homie"`     | Firmware name exposed through Homie                           |
+| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.4.1"`         | Firmware version exposed through Homie                        |
+| `CONFIG_HOMIE_BRAND`            | `"LaboSmartHome"` | Homie brand string exposed by the bridge                      |
 
-`HOMIE_CONVENTION_VERSION=5` must be passed by the embedding PlatformIO
-environment, not hidden inside one bridge source file, because the
-`labodj/homie-v5` dependency compiles its own translation units and must see
-the same convention selector. The bridge has a compile-time guard that rejects
-missing or legacy values instead of silently publishing Homie v3/v4 discovery.
+`HOMIE_CONVENTION_VERSION=5` must be passed by the embedding PlatformIO environment. The
+Homie dependency compiles its own translation units, so it must see the same convention
+selector as `lsh-bridge`. The bridge rejects missing or legacy values at compile time.
 
-The identity macros must expand to string literals. The Homie dependency builds
-its internal flagged string format through macro concatenation, so firmware
-identity is intentionally compile-time only in the current bridge API.
+The identity macros must expand to string literals because the Homie dependency builds
+its firmware identity through macro concatenation.
 
-## Liveness timers
+## Liveness Timers
 
-| Macro | Default | What it affects |
-| --- | --- | --- |
-| `CONFIG_PING_INTERVAL_CONTROLLINO_MS` | `10000U` | Minimum spacing between `PING_` frames sent to the controller. |
-| `CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS` | `CONFIG_PING_INTERVAL_CONTROLLINO_MS + 200U` | How long the controller may stay silent before the bridge marks it disconnected. |
+| Macro                                      | Default                                      | What it affects                                                         |
+| ------------------------------------------ | -------------------------------------------- | ----------------------------------------------------------------------- |
+| `CONFIG_PING_INTERVAL_CONTROLLINO_MS`      | `10000U`                                     | Minimum spacing between `PING_` frames sent to the controller           |
+| `CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS` | `CONFIG_PING_INTERVAL_CONTROLLINO_MS + 200U` | Time after the last controller frame before the link is considered lost |
 
-## Runtime policy knobs
+Keep the timeout slightly above the ping interval so one delayed ping does not
+immediately look like a disconnected controller.
 
-| Macro | Default | What it affects |
-| --- | --- | --- |
-| `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS` | `500U` | Delay between repeated `REQUEST_DETAILS` / `REQUEST_STATE` requests during bootstrap and controller resync. |
-| `CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS` | `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS` | Delay between repeated NVS save attempts while a topology migration is pending. |
-| `CONFIG_TOPOLOGY_REBOOT_GRACE_MS` | `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS` | Hard grace window before rebooting after a successful topology save, even if MQTT stays degraded. |
-| `CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS` | `40U` | Quiet window before a freshly received authoritative state is mirrored back out to MQTT and Homie. |
-| `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY` | `8U` | Number of complete inbound MQTT frames the bridge may buffer while the serial side is busy. Queue RAM cost is `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY * MQTT_COMMAND_MESSAGE_MAX_SIZE`, plus small queue metadata. Valid range: `1..255`. |
-| `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP` | `8U` | Maximum number of queued MQTT commands the main loop drains in one iteration while the UART is idle. This is a CPU/fairness knob, not a queue-capacity knob. Valid range: `1..255`. |
-| `CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS` | `50U` | Quiet window used to coalesce multiple actuator writes into one outbound `SET_STATE`. |
-| `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS` | `1000U` | Hard limit for how long an unstable pending actuator batch may stay open before the bridge drops it. |
-| `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT` | `32U` | Maximum number of accepted state changes merged into one pending actuator batch before the bridge treats the producer as unstable. |
-| `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER` | `0` | Sets the default value of `BridgeOptions::disableResetTrigger`. Leave it at `0` to keep Homie's physical reset trigger enabled, or set it to `1` for unattended deployments where GPIO0/BOOT must not act as a factory-reset input. |
+## Runtime Policy Knobs
 
-## Implementation storage
+| Macro                                        | Default                                | What it affects                                                                |
+| -------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------ |
+| `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS`       | `500U`                                 | Delay between repeated `REQUEST_DETAILS` and `REQUEST_STATE` requests          |
+| `CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS`     | `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS` | Delay between repeated NVS save attempts during topology migration             |
+| `CONFIG_TOPOLOGY_REBOOT_GRACE_MS`            | `CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS` | Grace window before rebooting after a successful topology save                 |
+| `CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS`    | `40U`                                  | Quiet window before received authoritative state is mirrored to MQTT and Homie |
+| `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY`         | `8U`                                   | Complete MQTT frames buffered while the serial side is busy                    |
+| `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP`          | `8U`                                   | Queued MQTT commands drained in one loop iteration while the UART is idle      |
+| `CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS` | `50U`                                  | Quiet window used to coalesce actuator writes into one `SET_STATE`             |
+| `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS`     | `1000U`                                | Maximum lifetime of one unstable pending actuator batch                        |
+| `CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT` | `32U`                                  | Maximum accepted mutations merged into one pending actuator batch              |
+| `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER`    | `0`                                    | Default for `BridgeOptions::disableResetTrigger`                               |
 
-| Macro | Default | What it affects |
-| --- | --- | --- |
-| `CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE` | `3072U` | Static byte storage reserved inside the public `LSHBridge` facade for the hidden runtime implementation. This avoids heap allocation while keeping the public header small. Normally leave it unset; if an unusual capacity profile makes the hidden implementation larger than the default, compilation fails with a clear `static_assert` and the embedding project can raise this value. |
+`CONFIG_MQTT_COMMAND_QUEUE_CAPACITY` costs RAM directly because each queued command owns
+one fixed-size command buffer. `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP` is a fairness knob,
+not a capacity knob.
 
-Internally the MQTT side also keeps two different size classes:
+Leave Homie's physical reset trigger enabled for bench setup. For unattended bridge
+boards where GPIO0/BOOT must not act as a factory-reset input, set
+`CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER=1` or configure
+`BridgeOptions::disableResetTrigger`.
 
-- `MQTT_COMMAND_MESSAGE_MAX_SIZE`: queue slot size for inbound MQTT commands only
-- `MQTT_PUBLISH_MESSAGE_MAX_SIZE`: temporary publish buffer size for outbound MQTT payloads, including retained `conf` topology publishes
+## Implementation Storage
 
-Only the outbound publish buffer still scales with worst-case `DEVICE_DETAILS`, because topology snapshots are really published by the bridge. The inbound command queue no longer pays that topology worst-case cost.
+| Macro                                 | Default | What it affects                                                   |
+| ------------------------------------- | ------- | ----------------------------------------------------------------- |
+| `CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE` | `3072U` | Static byte storage reserved inside the public `LSHBridge` facade |
 
-## Built-in persistent topology cache
+The bridge keeps its implementation opaque without heap allocation. Most projects can
+leave this unset. If an unusual capacity profile makes the hidden implementation larger
+than the default storage, compilation fails with a clear `static_assert` and the
+embedding project can raise this value.
 
-`lsh-bridge` persists the last validated controller `DEVICE_DETAILS`
-snapshot in ESP32 NVS. This behavior is intentionally built in and does not
-currently expose public `CONFIG_*` knobs.
+The MQTT side also keeps two size classes:
 
-Important notes:
+- `MQTT_COMMAND_MESSAGE_MAX_SIZE`: queue slot size for inbound commands
+- `MQTT_PUBLISH_MESSAGE_MAX_SIZE`: temporary buffer for outbound MQTT payloads,
+  including retained `conf` topology publishes
+
+Only the outbound publish buffer scales with worst-case `DEVICE_DETAILS`; inbound
+commands do not pay that topology worst-case cost.
+
+## Built-in Topology Cache
+
+`lsh-bridge` persists the last validated controller `DEVICE_DETAILS` snapshot in ESP32
+NVS. This behavior is built in and does not currently expose public `CONFIG_*` knobs.
+
+Important details:
 
 - only topology is persisted: device name, actuator IDs and button IDs
-- the stored record is an explicit byte format with magic/version/checksum, not
-  a raw C++ struct dump, so it is not coupled to compiler padding or field
-  layout
+- the stored record uses an explicit byte format with magic, version and checksum
 - older or invalid cache records are ignored and rebuilt from the controller
 - runtime actuator `STATE` is never written to flash
-- the cache is written only after a real topology change has been confirmed by
-  the controller
-- the bridge treats the controller as authoritative on every boot
+- the cache is written only after the controller confirms a real topology change
+- the controller remains authoritative on every boot
 
-The main compile-time knobs that constrain this cache are the
-capacity/validation limits above: `CONFIG_MAX_ACTUATORS`,
+The compile-time limits that constrain this cache are `CONFIG_MAX_ACTUATORS`,
 `CONFIG_MAX_BUTTONS` and `CONFIG_MAX_NAME_LENGTH`.
 
-## Codec and behavior flags
+## Codec and Behavior Flags
 
-| Macro | Default | What it affects |
-| --- | --- | --- |
-| `CONFIG_MSG_PACK_ARDUINO` | undefined | Serial side uses MessagePack wrapped in the bridge serial framing transport instead of newline-delimited JSON. |
-| `CONFIG_MSG_PACK_MQTT` | undefined | MQTT side uses MessagePack instead of JSON text. |
-| `LSH_DEBUG` | undefined | Enables debug logging. With `BridgeOptions::loggingMode = AutoFromBuild`, logs are on only when this flag is defined. |
-| `HOMIE_RESET` | undefined | During `bridge.begin()`, erases the stored Homie configuration and reboots into setup/AP mode only when a valid Homie config is currently present. New or already-reset devices enter setup mode automatically when no valid configuration is present. |
+| Macro                     | Default   | What it affects                                                                  |
+| ------------------------- | --------- | -------------------------------------------------------------------------------- |
+| `CONFIG_MSG_PACK_ARDUINO` | undefined | Controller serial side uses framed MessagePack instead of newline-delimited JSON |
+| `CONFIG_MSG_PACK_MQTT`    | undefined | MQTT payloads use MessagePack instead of JSON text                               |
+| `LSH_DEBUG`               | undefined | Enables debug logging when `BridgeOptions::loggingMode` is `AutoFromBuild`       |
+| `HOMIE_RESET`             | undefined | Erases a valid Homie configuration once, then reboots into setup/AP mode         |
 
-If `CONFIG_MSG_PACK_ARDUINO` and `CONFIG_MSG_PACK_MQTT` are both defined or both undefined, the bridge can forward some inbound command payloads without re-encoding. If only one side uses MessagePack, the bridge deserializes and reserializes between the two formats.
+If serial and MQTT use the same codec, the bridge can forward some inbound command
+payloads without re-encoding. If only one side uses MessagePack, the bridge deserializes
+and reserializes between formats.
 
-Serial MsgPack framing affects only the controller link. It does not change MQTT payloads and it does not change the logical LSH payload format. It only wraps serial MsgPack payloads in a delimiter-and-escape transport frame so the receiver can deframe them without using stream timeouts as implicit framing.
+Serial MessagePack framing affects only the controller link. MQTT payloads are not
+framed, and the logical LSH payload format stays the same.
 
-## ETL profile override
+## ETL Profile Override
 
 `lsh-bridge` ships with a default
-[`include/etl_profile.h`](https://github.com/labodj/lsh-bridge/blob/main/include/etl_profile.h) so the standard
-Arduino/PlatformIO case works without extra setup.
+[`include/etl_profile.h`](https://github.com/labodj/lsh-bridge/blob/main/include/etl_profile.h)
+for the standard Arduino/PlatformIO case. It keeps ETL compiler/platform detection on
+the official auto-detect path and applies only the bridge's default ETL policy flags.
 
-That default profile intentionally keeps ETL compiler/platform detection on the
-official auto-detect path and only applies the bridge's default ETL policy
-flags.
+If an embedding project needs different ETL behavior:
 
-If an embedding project needs different ETL behavior for another target or
-toolchain, the
-recommended override path is:
-
-1. Create a small project-local override header, for example `include/lsh_etl_profile_override.h`
-2. Pass `-D LSH_ETL_PROFILE_OVERRIDE_HEADER=\"lsh_etl_profile_override.h\"`
-3. In that header, `#undef` and redefine only the ETL macros that must change
+1. Create a small project-local override header, for example
+   `include/lsh_etl_profile_override.h`.
+2. Pass `-D LSH_ETL_PROFILE_OVERRIDE_HEADER=\"lsh_etl_profile_override.h\"`.
+3. Redefine only the ETL macros that must change.
 
 Example:
 
@@ -187,36 +196,23 @@ Example:
 #define ETL_THROW_EXCEPTIONS
 ```
 
-If your build system prefers full ownership of the ETL profile, you may also
-provide your own project-level `etl_profile.h` earlier in the include path and
-bypass the one shipped by `lsh-bridge`.
+The bundled example demonstrates this hook through
+[examples/basic-homie-bridge/include/lsh_etl_profile_override.h](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/include/lsh_etl_profile_override.h)
+and the matching PlatformIO build flag.
 
-The bundled example already demonstrates this hook through
-[`examples/basic-homie-bridge/include/lsh_etl_profile_override.h`](https://github.com/labodj/lsh-bridge/blob/main/examples/basic-homie-bridge/include/lsh_etl_profile_override.h)
-and the matching `LSH_ETL_PROFILE_OVERRIDE_HEADER` build flag in the example
-`platformio.ini`.
+## Runtime Behaviors Outside `CONFIG_*`
 
-## Runtime behaviors that are not `CONFIG_*`
-
-Some important bridge behaviors are runtime-managed even after the knobs
-above and are not exposed as public compile-time values:
+Some bridge behavior is runtime-managed rather than compile-time configured:
 
 - bridge-local diagnostics published on the MQTT `bridge` topic
-- the exact diagnostic payload shapes
-- counter aggregation and reset policy for queue-overflow and command-rejection diagnostics
-- the NVS-backed `DEVICE_DETAILS` cache and its on-change write policy
+- diagnostic payload shapes and aggregation policy
+- the NVS-backed `DEVICE_DETAILS` cache write policy
+- queue indexing, critical sections and document pool sizing
 
 Those behaviors are documented in
-[`docs/runtime-behavior.md`](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
+[docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
 
-## Read Next
-
-- For runtime policy and diagnostics: [runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md)
-- For the bridge overview and example entry point: [README.md](https://github.com/labodj/lsh-bridge/blob/main/README.md)
-- For the public stack profile: <https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md>
-- For first-lab symptom diagnosis: <https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md>
-
-## PlatformIO example
+## PlatformIO Example
 
 ```ini
 build_flags =
@@ -230,9 +226,7 @@ build_flags =
     -D CONFIG_ARDCOM_SERIAL_BAUD=250000U
     -D CONFIG_ARDCOM_SERIAL_TIMEOUT_MS=5U
     ; -D CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS=5U
-    ; default: CONFIG_ARDCOM_SERIAL_TIMEOUT_MS
     ; -D CONFIG_ARDCOM_SERIAL_MAX_RX_BYTES_PER_LOOP=32U
-    ; default: SERIAL_RX_BUFFER_SIZE in JSON mode, SERIAL_RX_MAX_FRAMED_MESSAGE_SIZE in MsgPack mode
     -D CONFIG_MQTT_TOPIC_BASE=\"LSH\"
     -D CONFIG_MQTT_TOPIC_INPUT=\"IN\"
     -D CONFIG_MQTT_TOPIC_STATE=\"state\"
@@ -247,10 +241,6 @@ build_flags =
     -D CONFIG_PING_INTERVAL_CONTROLLINO_MS=10000U
     -D CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS=10200U
     ; -D CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS=500U
-    ; -D CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS=500U
-    ; default: CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS
-    ; -D CONFIG_TOPOLOGY_REBOOT_GRACE_MS=500U
-    ; default: CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS
     ; -D CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS=40U
     ; -D CONFIG_MQTT_COMMAND_QUEUE_CAPACITY=8U
     ; -D CONFIG_MQTT_MAX_COMMANDS_PER_LOOP=8U
@@ -258,14 +248,9 @@ build_flags =
     ; -D CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS=1000U
     ; -D CONFIG_ACTUATOR_COMMAND_MAX_MUTATION_COUNT=32U
     ; -D CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER=1
-    ; default: 0, Homie's physical reset trigger remains enabled
     ; -D CONFIG_LSH_BRIDGE_IMPL_STORAGE_SIZE=3072U
     -D CONFIG_MSG_PACK_ARDUINO
-    ; default: undefined
     ; -D CONFIG_MSG_PACK_MQTT
-    ; default: undefined
     ; -D LSH_DEBUG
-    ; default: undefined
     ; -D HOMIE_RESET
-    ; default: undefined
 ```
