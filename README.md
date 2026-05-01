@@ -1,8 +1,8 @@
 # lsh-bridge: ESP32 Bridge for Labo Smart Home
 
 [![PlatformIO Registry](https://badges.registry.platformio.org/packages/labodj/library/lsh-bridge.svg)](https://registry.platformio.org/libraries/labodj/lsh-bridge)
-[![CI](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Flabodj%2Flsh-bridge%2Factions%2Fworkflows%2Fci.yml%2Fruns%3Fper_page%3D1&query=%24.workflow_runs%5B0%5D.conclusion&label=CI)](https://github.com/labodj/lsh-bridge/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/release/labodj/lsh-bridge.svg)](https://github.com/labodj/lsh-bridge/releases/latest)
+[![CI](https://github.com/labodj/lsh-bridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/labodj/lsh-bridge/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/labodj/lsh-bridge?display_name=tag&sort=semver)](https://github.com/labodj/lsh-bridge/releases/latest)
 [![License](https://img.shields.io/github/license/labodj/lsh-bridge.svg)](https://github.com/labodj/lsh-bridge/blob/main/LICENSE)
 
 `lsh-bridge` is the ESP32 side of the **Labo Smart Home** controller path. It talks to
