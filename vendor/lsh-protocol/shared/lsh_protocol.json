@@ -1,11 +1,11 @@
 {
   "meta": {
     "name": "LSH Protocol",
-    "specRevision": 2026043001,
+    "specRevision": 2026050101,
     "wireProtocolMajor": 3,
-    "notes": "Code-only revision. Never transmitted on wire.",
+    "notes": "Metadata-only revision. Never transmitted on wire.",
     "documentation": {
-      "trustedEnvironment": "The protocol assumes a trusted environment and a cooperative broker. There is no built-in authentication, integrity or confidentiality layer on the LSH payloads.",
+      "trustedEnvironment": "The protocol assumes a trusted environment and a cooperative broker. Protect the transport instead: use MQTT users and ACLs, TLS, network isolation, serial trust boundaries, and host controls. LSH payloads do not carry their own authentication, integrity, or confidentiality layer.",
       "handshake": [
         "`BOOT` is a re-sync trigger only. It never carries compatibility metadata.",
         "A peer that receives `BOOT` must discard runtime assumptions derived from the sender and re-synchronize according to the active transport/profile.",

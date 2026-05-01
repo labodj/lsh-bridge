@@ -12,10 +12,13 @@ bridge or automation runtime is allowed to decide for itself.
 If you are implementing LSH outside the original stack, read this page before
 mapping the protocol onto your own transport.
 
+For the full repository documentation map, start from
+[../DOCS.md](../DOCS.md).
+
 ## The Short Version
 
-The base LSH protocol is compact and deliberately small. It defines messages,
-not a mandatory product topology.
+The base LSH protocol is compact and small on purpose. It defines messages, not
+a mandatory product topology.
 
 It does not require this shape:
 
@@ -278,6 +281,7 @@ When implementing LSH from scratch:
 ## Read Next
 
 - Exact generated wire contract: [../shared/lsh_protocol.md](../shared/lsh_protocol.md)
+- Documentation map: [../DOCS.md](../DOCS.md)
 - Protocol repo overview: [../README.md](../README.md)
 - Public reference stack walkthrough: <https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md>
-- Adoption FAQ: <https://github.com/labodj/labo-smart-home/blob/main/FAQ.md>
+- LSH FAQ: <https://github.com/labodj/labo-smart-home/blob/main/FAQ.md>

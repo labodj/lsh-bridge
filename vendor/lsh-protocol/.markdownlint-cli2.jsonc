@@ -2,5 +2,5 @@
   "config": {
     "MD013": false,
   },
-  "globs": ["README.md", "docs/**/*.md", "shared/**/*.md"],
+  "globs": ["README.md", "DOCS.md", "docs/**/*.md", "shared/**/*.md"],
 }

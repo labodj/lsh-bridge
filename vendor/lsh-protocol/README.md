@@ -2,15 +2,15 @@
 
 [![Build Status](https://github.com/labodj/lsh-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/labodj/lsh-protocol/actions/workflows/ci.yml)
 [![Latest Release](https://img.shields.io/github/v/release/labodj/lsh-protocol?display_name=tag&sort=semver)](https://github.com/labodj/lsh-protocol/releases/latest)
+[![License](https://img.shields.io/github/license/labodj/lsh-protocol.svg)](https://github.com/labodj/lsh-protocol/blob/main/LICENSE)
 
-`lsh-protocol` is the small, shared contract that keeps the LSH ecosystem
+`lsh-protocol` is the small shared contract that keeps the LSH ecosystem
 speaking the same language.
 
 It does not contain firmware logic, Node-RED flows, automation rules, or device
-configuration. It contains the part that must never become a matter of opinion:
-wire keys, command IDs, click IDs, golden payloads, compatibility metadata, and
-the generator that turns those definitions into code for the public LSH
-projects.
+configuration. It contains the part that has to stay identical everywhere: wire
+keys, command IDs, click IDs, golden payloads, compatibility metadata, and the
+generator that turns those definitions into code for the public LSH projects.
 
 The `main` branch can move ahead while coordinated work is in progress. If you
 are building outside the public LSH repositories, vendor a tagged release so the
@@ -34,18 +34,21 @@ The current public stack is documented from the user-facing side here:
 This repository stays lower level. It explains the contract and gives maintainers
 one place to update it without hand-editing each consumer.
 
-## Start Here
+## Documentation
 
-Choose the document that matches the question in front of you:
+The full documentation map lives in [DOCS.md](./DOCS.md). Start there when you
+need to choose between the generated wire reference, the hand-written roles
+guide, and the consumer integration flow.
 
-- Need exact payload shapes, numeric command IDs, compact JSON keys, or golden
-  examples? Read [shared/lsh_protocol.md](./shared/lsh_protocol.md).
-- Need to understand what `BOOT`, `PING`, roles, and hop-local behavior actually
-  mean? Read [docs/profiles-and-roles.md](./docs/profiles-and-roles.md).
-- Need to update generated files in a consumer repository? Jump to
-  [Consumer Integration](#consumer-integration).
-- Need the practical public MQTT/Homie/Node-RED profile? Start from the
-  [reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md).
+For the shortest path:
+
+- read [profiles and roles](./docs/profiles-and-roles.md) before designing a
+  bridge, gateway, or coordinator;
+- keep [the generated reference](./shared/lsh_protocol.md) open when writing
+  encoders, decoders, tests, or generated constants;
+- use the
+  [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
+  for the current public MQTT/Homie/Node-RED profile.
 
 ## Repository Contents
 
@@ -55,6 +58,8 @@ Choose the document that matches the question in front of you:
   Human-readable golden examples used by tests, generated docs, and consumers.
 - `shared/lsh_protocol.md`
   Generated reference documentation. Do not edit it by hand.
+- `DOCS.md`
+  The documentation map for this repository.
 - `docs/profiles-and-roles.md`
   Hand-written guidance for implementers. This is where the protocol semantics
   are explained in normal language.
@@ -73,7 +78,7 @@ This repo owns:
 - generated protocol documentation
 - role-neutral guidance for implementers
 
-This repo deliberately does not own:
+This repo does not own:
 
 - firmware behavior
 - bridge policy
@@ -81,8 +86,8 @@ This repo deliberately does not own:
 - Home Assistant or Homie projection
 - physical device configuration
 
-That separation matters. A protocol repository should be boring, stable, and
-hard to misread. Product behavior belongs in the product repositories.
+That separation matters. A protocol repository should be predictable, stable,
+and hard to misread. Product behavior belongs in the product repositories.
 
 ## Compatibility Model
 
@@ -170,7 +175,7 @@ python3 tools/update_lsh_protocol.py --check
 ```
 
 Consumer wrappers should default to the vendored subtree. Use `--protocol-root`
-or `LSH_PROTOCOL_ROOT` only when you deliberately want to test against a local
+or `LSH_PROTOCOL_ROOT` only when you explicitly want to test against a local
 protocol checkout.
 
 ## Generator Usage
