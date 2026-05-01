@@ -1,36 +1,74 @@
 # LSH Protocol
 
-Single source of truth for the LSH wire protocol.
+[![Build Status](https://github.com/labodj/lsh-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/labodj/lsh-protocol/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/labodj/lsh-protocol?display_name=tag&sort=semver)](https://github.com/labodj/lsh-protocol/releases/latest)
+[![License](https://img.shields.io/github/license/labodj/lsh-protocol.svg)](https://github.com/labodj/lsh-protocol/blob/main/LICENSE)
 
-This repository contains the compact protocol specification shared by:
+`lsh-protocol` is the small shared contract that keeps the LSH ecosystem
+speaking the same language.
 
-- `lsh-core`
-- `lsh-bridge`
-- `node-red-contrib-lsh-logic`
+It does not contain firmware logic, Node-RED flows, automation rules, or device
+configuration. It contains the part that has to stay identical everywhere: wire
+keys, command IDs, click IDs, golden payloads, compatibility metadata, and the
+generator that turns those definitions into code for the public LSH projects.
 
-It is responsible for keeping the protocol contract explicit, versioned, and reproducible across firmware and application repositories.
+The `main` branch can move ahead while coordinated work is in progress. If you
+are building outside the public LSH repositories, vendor a tagged release so the
+protocol copy in your project stays reproducible.
 
-If you want to implement the protocol from scratch, read the docs in this order:
+## Where This Fits
 
-1. [shared/lsh_protocol.md](./shared/lsh_protocol.md) for the generated wire contract
-2. [docs/profiles-and-roles.md](./docs/profiles-and-roles.md) for the role model, hop-local semantics and implementation guidance
+The protocol is shared by these repositories:
 
-## Contents
+- `lsh-core`: the firmware-side controller implementation
+- `lsh-bridge`: the serial-to-MQTT bridge implementation
+- `labo-smart-home-coordinator`: the standalone automation coordinator
+- `node-red-contrib-lsh-logic`: the Node-RED package built around the coordinator
+
+The current public stack is documented from the user-facing side here:
+
+- [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
+- [LSH glossary](https://github.com/labodj/labo-smart-home/blob/main/GLOSSARY.md)
+- [LSH FAQ](https://github.com/labodj/labo-smart-home/blob/main/FAQ.md)
+
+This repository stays lower level. It explains the contract and gives maintainers
+one place to update it without hand-editing each consumer.
+
+## Documentation
+
+The full documentation map lives in [DOCS.md](./DOCS.md). Start there when you
+need to choose between the generated wire reference, the hand-written roles
+guide, and the consumer integration flow.
+
+For the shortest path:
+
+- read [profiles and roles](./docs/profiles-and-roles.md) before designing a
+  bridge, gateway, or coordinator;
+- keep [the generated reference](./shared/lsh_protocol.md) open when writing
+  encoders, decoders, tests, or generated constants;
+- use the
+  [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
+  for the current public MQTT/Homie/Node-RED profile.
+
+## Repository Contents
 
 - `shared/lsh_protocol.json`
-  Compact protocol spec and metadata.
+  The compact protocol specification. Edit this when the wire contract changes.
 - `shared/lsh_protocol_golden_payloads.json`
-  Golden examples used to validate generated artifacts and codec behavior.
+  Human-readable golden examples used by tests, generated docs, and consumers.
 - `shared/lsh_protocol.md`
-  Human-readable reference generated from the shared spec.
+  Generated reference documentation. Do not edit it by hand.
+- `DOCS.md`
+  The documentation map for this repository.
 - `docs/profiles-and-roles.md`
-  Hand-written semantic guide for implementers and transport/profile mapping.
+  Hand-written guidance for implementers. This is where the protocol semantics
+  are explained in normal language.
 - `tools/generate_lsh_protocol.py`
-  Generator for shared protocol artifacts consumed by the LSH repositories.
+  The generator used by this repository and by vendored consumer copies.
 
 ## Scope
 
-This repo is the source of truth for:
+This repo owns:
 
 - wire command IDs
 - compact JSON keys
@@ -38,96 +76,89 @@ This repo is the source of truth for:
 - protocol compatibility metadata
 - golden payload examples
 - generated protocol documentation
-- role-neutral semantic guidance for implementers
+- role-neutral guidance for implementers
 
-This repo is not responsible for:
+This repo does not own:
 
-- firmware logic
-- repository-specific bridge behavior
+- firmware behavior
+- bridge policy
 - Node-RED business logic
-- hardware configuration
+- Home Assistant or Homie projection
+- physical device configuration
 
-## Design Goals
-
-- compact on-wire representation
-- deterministic generated artifacts
-- explicit compatibility rules
-- simple maintenance across separate git repositories
-- no ambiguity about protocol ownership
-
-## Trusted Environment
-
-The LSH protocol assumes a trusted environment and a cooperative broker. It does not embed authentication, integrity, or confidentiality mechanisms in the payload format itself. That constraint is intentional and must stay documented in all consumer repositories.
+That separation matters. A protocol repository should be predictable, stable,
+and hard to misread. Product behavior belongs in the product repositories.
 
 ## Compatibility Model
 
-The compatibility agreement is intentionally minimal:
+The compatibility agreement is intentionally simple.
 
-- `BOOT` is only a re-sync trigger. It does not carry version metadata.
-- runtime wire compatibility is checked when the controller later sends `DEVICE_DETAILS`
-- `DEVICE_DETAILS.v` must match the locally compiled `wireProtocolMajor`
-- `specRevision` is repository/generation metadata only; it is not negotiated on wire
+`BOOT` is a re-sync signal. It does not negotiate protocol versions. Runtime
+compatibility is checked later, when a peer receives `DEVICE_DETAILS`.
 
-Runtime decision rule:
+`DEVICE_DETAILS.v` carries the wire protocol major. If it matches the locally
+compiled `wireProtocolMajor`, the peers may continue the handshake. If it does
+not match, the payload must be rejected.
 
-- if `DEVICE_DETAILS.v` matches, the peers may continue the handshake
-- if `DEVICE_DETAILS.v` does not match, the consumer must reject the handshake payload
+Keep these two values separate:
 
-Keep these terms distinct:
+- `wireProtocolMajor` decides runtime wire compatibility.
+- `specRevision` tracks the source-of-truth revision used to generate docs and
+  code.
 
-- `wireProtocolMajor` decides whether two peers may speak to each other at runtime
-- `specRevision` tracks source-of-truth evolution for generated code and documentation
+`specRevision` is useful for humans, CI, and vendoring checks. It is not a wire
+negotiation mechanism.
 
 ## Transport Model
 
-The LSH logical payloads are transport-agnostic. Transport behavior is documented here because it affects interoperability between repositories:
+LSH logical payloads are transport-agnostic. The same command can travel over
+serial, MQTT, or another profile-defined transport as long as the payload shape
+stays valid.
 
-- JSON over serial: newline-delimited
-- MsgPack over serial: `END + escaped(payload) + END`, with `END = 0xC0`, `ESC = 0xDB`, `ESC_END = 0xDC`, `ESC_ESC = 0xDD`
+The current shared transport rules are:
+
+- JSON over serial: newline-delimited JSON
+- MsgPack over serial: `END + escaped(payload) + END`, with `END = 0xC0`,
+  `ESC = 0xDB`, `ESC_END = 0xDC`, and `ESC_ESC = 0xDD`
 - MQTT JSON: raw JSON payload
 - MQTT MsgPack: raw MsgPack payload
 
-What is intentionally _not_ part of the base transport model:
+The base protocol does not decide how many hops your deployment has, whether a
+bridge exists, whether commands are forwarded, or how state is projected into
+Homie or Home Assistant. Those are profile decisions.
 
-- how many hops a deployment has
-- whether a bridge exists at all
-- whether a command is forwarded transparently or interpreted locally
-- how a specific implementation projects LSH state into Homie, Home Assistant, or other higher-level systems
+## Trusted Environment
 
-Those choices belong to transport or implementation profiles, not to the base wire contract.
+The LSH payload format assumes a trusted environment and a cooperative broker.
+It does not provide authentication, encryption, replay protection, or integrity
+checks inside the payload itself.
 
-## Semantic Layers
-
-Keep these layers distinct when reading or implementing the protocol:
-
-- **Wire contract**: command IDs, keys, payload shapes, compatibility checks
-- **Role semantics**: what a command means between immediate peers, regardless of product names
-- **Profiles**: how a concrete stack applies the protocol on serial, MQTT service topics, gateways, or direct networked controllers
-- **Reference implementations**: how `lsh-core`, `lsh-bridge`, and `node-red-contrib-lsh-logic` choose to realize those profiles
-
-The autogenerated spec covers the wire contract.
-The hand-written guide in [docs/profiles-and-roles.md](./docs/profiles-and-roles.md) covers the semantic layer that must remain understandable for third-party implementations.
-
-## Workflow
-
-1. edit the shared spec or golden payloads
-2. run the generator for the targets you want to update
-3. commit the updated generated artifacts
-4. propagate changes to consumer repositories
+Use the security mechanisms of the transport and deployment: MQTT users and ACLs,
+TLS, network isolation, serial trust boundaries, and operating-system controls.
 
 ## Consumer Integration
 
-Each consumer repository vendors this repo at `vendor/lsh-protocol` via `git subtree`.
+Each consumer repository vendors this repo at `vendor/lsh-protocol` through
+`git subtree`.
 
-Initial add inside a consumer repository:
+For stable third-party integrations, vendor a released tag:
 
 ```bash
 git remote add lsh-protocol git@github.com:labodj/lsh-protocol.git || git remote set-url lsh-protocol git@github.com:labodj/lsh-protocol.git
 git fetch lsh-protocol
-git subtree add --prefix=vendor/lsh-protocol lsh-protocol main --squash
+git subtree add --prefix=vendor/lsh-protocol lsh-protocol <tag> --squash
 ```
 
-Subsequent updates inside a consumer repository:
+To update an existing vendored copy:
+
+```bash
+git remote add lsh-protocol git@github.com:labodj/lsh-protocol.git || git remote set-url lsh-protocol git@github.com:labodj/lsh-protocol.git
+git fetch lsh-protocol
+git subtree pull --prefix=vendor/lsh-protocol lsh-protocol <tag> --squash
+```
+
+Use `main` only when you are intentionally coordinating unreleased protocol work
+across multiple LSH repositories:
 
 ```bash
 git remote add lsh-protocol git@github.com:labodj/lsh-protocol.git || git remote set-url lsh-protocol git@github.com:labodj/lsh-protocol.git
@@ -135,67 +166,82 @@ git fetch lsh-protocol
 git subtree pull --prefix=vendor/lsh-protocol lsh-protocol main --squash
 ```
 
-After updating the vendored copy, regenerate or verify the target-specific outputs from the consumer itself:
+After updating the vendored copy, regenerate or verify the target-specific files
+from the consumer repository:
 
 ```bash
 python3 tools/update_lsh_protocol.py
 python3 tools/update_lsh_protocol.py --check
 ```
 
-The consumer wrappers now default to the vendored subtree only. Local sibling repos are no longer auto-discovered. Use `--protocol-root` or `LSH_PROTOCOL_ROOT` only for explicit manual overrides.
+Consumer wrappers should default to the vendored subtree. Use `--protocol-root`
+or `LSH_PROTOCOL_ROOT` only when you explicitly want to test against a local
+protocol checkout.
 
 ## Generator Usage
 
-Generate only the human-readable reference inside this repository:
+Generate the shared Markdown reference in this repository:
 
 ```bash
 python3 tools/generate_lsh_protocol.py
 ```
 
-Check only:
+Check that generated files are up to date:
 
 ```bash
 python3 tools/generate_lsh_protocol.py --check
 ```
 
-Generate outputs for consumer repositories explicitly:
+Generate outputs for the public consumers:
 
 ```bash
 python3 tools/generate_lsh_protocol.py \
   --target shared-doc \
   --target core \
   --target bridge \
+  --target coordinator \
   --target node-red \
   --core-root /path/to/lsh-core \
   --bridge-root /path/to/lsh-bridge \
+  --coordinator-root /path/to/labo-smart-home-coordinator \
   --node-red-root /path/to/node-red-contrib-lsh-logic
 ```
 
-This repository is intentionally standalone:
+Target meanings:
 
-- it does not assume a monorepo layout
-- consumer outputs are emitted only when their target roots are passed explicitly
-- `shared-doc` is the default target when no `--target` is provided
+- `shared-doc` writes the generated Markdown reference.
+- `core` writes C++ headers for `lsh-core`.
+- `bridge` writes C++ headers for `lsh-bridge`.
+- `coordinator` writes TypeScript protocol constants for the standalone
+  coordinator package.
+- `node-red` writes TypeScript protocol constants for packages that consume the
+  protocol directly from a Node-RED repository.
 
-Typical maintainer flow from this repository:
+The `node-red` target is retained for direct Node-RED package consumption. The
+preferred direction for new LSH automation work is to keep protocol logic inside
+`labo-smart-home-coordinator` and let Node-RED wrap that library.
 
-```bash
-python3 tools/generate_lsh_protocol.py
-python3 tools/generate_lsh_protocol.py --check
-python3 tools/generate_lsh_protocol.py \
-  --target shared-doc \
-  --target core \
-  --target bridge \
-  --target node-red \
-  --core-root /path/to/lsh-core \
-  --bridge-root /path/to/lsh-bridge \
-  --node-red-root /path/to/node-red-contrib-lsh-logic
-```
+## Maintainer Flow
+
+When the wire contract changes:
+
+1. Edit `shared/lsh_protocol.json`.
+2. Update `shared/lsh_protocol_golden_payloads.json` if examples changed.
+3. Run `python3 tools/generate_lsh_protocol.py`.
+4. Run `python3 tools/generate_lsh_protocol.py --check`.
+5. Propagate the vendored protocol copy into consumer repositories.
+6. Run each consumer's protocol update/check command.
+7. Commit the spec, generated docs, and consumer-generated outputs together in
+   the appropriate repositories.
 
 ## Versioning
 
-Keep these concepts distinct:
+Use these concepts precisely:
 
-- `wireProtocolMajor`: runtime wire compatibility only
-- `specRevision`: source-of-truth revision for generated code and docs
-- git tags: repository release milestones
+- `wireProtocolMajor`: runtime wire compatibility
+- `specRevision`: source-of-truth revision for generated code and documentation
+- git tags: released protocol milestones
+
+Small documentation or generator-quality changes do not necessarily imply a new
+wire protocol major. Any payload shape or command meaning change must be handled
+with the same care as a firmware/API compatibility change.
