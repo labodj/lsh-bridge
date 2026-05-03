@@ -3,9 +3,9 @@
 This is the operational reference for `lsh-bridge`: startup, topology recovery, MQTT
 command handling, diagnostics and Homie integration.
 
-For exact build flags and capacity knobs, read
+For exact build flags and capacity settings, read
 [docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md).
-For the adoption path and public example, start from the
+For the first-use path and public example, start from the
 [README](https://github.com/labodj/lsh-bridge/blob/main/README.md).
 
 ## Mental Model
@@ -16,11 +16,11 @@ taking ownership of the physical panel.
 That leads to a few rules:
 
 - the controller remains authoritative for runtime actuator state
-- MQTT and Homie writes are treated as remote intent until they are safe to send
+- MQTT and Homie writes are treated as remote intent until they are valid to send
 - cached topology helps the bridge start quickly, but fresh controller details take
   precedence after boot
 - bridge-local diagnostics are published separately from controller-backed events
-- malformed, stale or unsafe commands are rejected instead of being replayed later
+- malformed or stale commands are rejected instead of being replayed later
 
 ## Controller Bootstrap and Topology Cache
 
@@ -33,7 +33,7 @@ During startup:
 
 - only controller `DEVICE_DETAILS` are cached in NVS
 - the cache record uses an explicit byte format with magic, version and checksum
-- invalid or older cache records are ignored and rebuilt from the controller
+- old or invalid cache records are ignored and rebuilt from the controller
 - actuator runtime `STATE` is never persisted
 - after startup, the bridge retries `REQUEST_DETAILS` at the configured bootstrap
   interval
@@ -82,7 +82,7 @@ short burst of MQTT writes.
 The bridge forwards stable intent, not endless toggles. A producer cannot keep one
 actuator batch open forever by continuously changing desired states.
 
-Safety limits:
+Stability limits:
 
 - maximum pending batch duration defaults to `1000 ms`
 - `CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS` controls that duration
@@ -118,7 +118,7 @@ backpressure problem, not as a reason to block MQTT callbacks.
 
 When `CONFIG_MSG_PACK_ARDUINO` is enabled, serial MessagePack uses a framed transport.
 The LSH payload stays unchanged; the bridge only wraps the serial payload so the UART
-receiver can deframe without relying on stream timeouts.
+receiver can recover frames without relying on stream timeouts.
 
 Framing rules:
 
@@ -129,17 +129,17 @@ Framing rules:
 This transport layer is local to the controller UART:
 
 - MQTT payloads are never serial-framed
-- ArduinoJson sees only the deframed MessagePack payload
+- ArduinoJson sees only the recovered MessagePack payload
 - raw-forwarded serial MessagePack payloads are framed only when they cross the
   controller UART
 
 Serial MessagePack is wire-compatible only with a peer that uses the same framed
 transport.
 
-## Homie v5 Discovery
+## Homie v5 Model
 
-`lsh-bridge` requires `HOMIE_CONVENTION_VERSION=5` at build time. With the current
-`labodj/homie-v5` PlatformIO package, discovery is published as one retained JSON
+`lsh-bridge` requires `HOMIE_CONVENTION_VERSION=5` at build time. With the
+`labodj/homie-v5` PlatformIO package, the Homie model is published as one retained JSON
 document:
 
 ```text
@@ -149,7 +149,7 @@ homie/5/<device>/$description
 Each cached controller actuator becomes one Homie node. Its canonical property is
 `state`, which is boolean, retained and settable.
 
-Commands are published to:
+Actuator commands are received on:
 
 ```text
 homie/5/<device>/<actuator-id>/state/set
@@ -207,14 +207,14 @@ Setup behavior:
   Homie configuration exists
 
 This preserves the "force setup on next boot" workflow without creating a reset loop on
-unconfigured devices.
+devices without stored configuration.
 
 ## Bridge-local Diagnostics on `bridge`
 
 Diagnostics are emitted from the main loop, not directly from callbacks. The bridge does
 not publish MQTT while already inside the MQTT client's message callback.
 
-Current diagnostic kinds:
+Diagnostic kinds currently emitted:
 
 - `actuator_command_storm_dropped`
 - `mqtt_queue_overflow`
@@ -279,7 +279,7 @@ Logical payload shape:
 Fields:
 
 - `rejected_retained_commands`: retained MQTT commands rejected because replaying them
-  after reconnect would be unsafe
+  after reconnect could apply stale intent
 - `rejected_oversize_commands`: MQTT commands rejected before enqueue because they
   exceeded the fixed inbound command buffer
 - `rejected_fragmented_commands`: MQTT commands rejected because the bridge only accepts
@@ -319,8 +319,8 @@ Fields:
 - `rejected_homie_stage_failed_commands`: valid Homie actuator writes that could not be
   staged into the pending actuator batch
 
-Homie property callbacks intentionally keep consuming these writes. The diagnostic lets
-a caller observe the rejection without making Homie redeliver stale or unsafe writes.
+Homie property callbacks intentionally continue to consume these writes. The diagnostic
+lets a caller observe the rejection without making Homie redeliver stale writes.
 
 ### `service_ping_reply`
 

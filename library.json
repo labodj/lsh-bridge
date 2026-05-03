@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/schema/library.json",
   "name": "lsh-bridge",
   "version": "1.4.2",
-  "description": "Reusable ESP32 bridge runtime for the LSH ecosystem, connecting serial controllers to MQTT and Homie.",
+  "description": "Reusable ESP32 bridge runtime for the LSH stack, connecting serial controllers to MQTT and Homie.",
   "license": "Apache-2.0",
   "keywords": ["lsh", "esp32", "mqtt", "homie", "bridge", "serial", "msgpack"],
   "authors": [
@@ -45,6 +45,7 @@
       "LICENSE",
       "NOTICE",
       "README.md",
+      "DOCS.md",
       "docs/*",
       "examples/basic-homie-bridge/include/*",
       "examples/basic-homie-bridge/platformio.ini",

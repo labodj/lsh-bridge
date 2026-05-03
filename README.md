@@ -5,17 +5,17 @@
 [![Latest Release](https://img.shields.io/github/v/release/labodj/lsh-bridge?display_name=tag&sort=semver)](https://github.com/labodj/lsh-bridge/releases/latest)
 [![License](https://img.shields.io/github/license/labodj/lsh-bridge.svg)](https://github.com/labodj/lsh-bridge/blob/main/LICENSE)
 
-`lsh-bridge` is the ESP32 side of the **Labo Smart Home** controller path. It talks to
-an `lsh-core` controller over UART, exposes the controller model over MQTT and Homie,
-and keeps the network-facing runtime synchronized with the physical panel.
+`lsh-bridge` is the ESP32 bridge runtime for the **Labo Smart Home** controller path. It
+talks to an `lsh-core` controller over UART, exposes the controller model over MQTT and
+Homie, and keeps the network-facing runtime synchronized with the physical panel.
 
-The best documented path is one bridge per controller: a Controllino-style AVR device
-running `lsh-core`, an ESP32 running `lsh-bridge`, an MQTT broker, and the LSH
+The reference path documented here is one bridge per controller: a Controllino-style AVR
+device running `lsh-core`, an ESP32 running `lsh-bridge`, an MQTT broker, and the LSH
 coordinator or Node-RED logic layer above it.
 
 If you are new to LSH as a whole, start with the
 [`labo-smart-home` documentation map](https://github.com/labodj/labo-smart-home/blob/main/DOCS.md)
-before changing bridge settings.
+before tuning bridge settings.
 
 The `main` branch can move ahead of tagged releases. For downstream projects, prefer
 released tags unless you are intentionally testing coordinated unreleased work across
@@ -32,8 +32,8 @@ the LSH repos.
 - it keeps a validated controller topology cache in ESP32 NVS
 - it asks the controller to resync after boot, MQTT recovery or topology changes
 
-The bridge does not own field I/O. Buttons, relays, indicators and local fallback remain
-controller responsibilities.
+The bridge does not own physical I/O. Buttons, relays, indicators and local fallback
+remain controller responsibilities.
 
 ## What You Need
 
@@ -44,15 +44,15 @@ For the documented bridge path:
 - a controller running `lsh-core`
 - a hardware UART between controller and ESP32
 - a 5 V / 3.3 V level shifter when the controller UART is 5 V
-- an MQTT broker; the bridge publishes Homie discovery from the controller topology
+- an MQTT broker; the bridge publishes Homie v5 metadata from the controller topology
 
 The bridge is optimized for a static controller topology. It can recover from a changed
-topology, but that change is still expected to come from reflashing or rebooting the
-controller, not from devices appearing dynamically at runtime.
+topology, but topology changes are expected to come from controller firmware updates or
+reboots rather than from devices appearing dynamically at runtime.
 
 ## First Build
 
-The quickest working reference is the bundled PlatformIO example:
+The practical starting reference is the bundled PlatformIO example:
 
 ```bash
 platformio run -d examples/basic-homie-bridge -e release
@@ -61,7 +61,7 @@ platformio run -d examples/basic-homie-bridge -e release
 The example also keeps CI-backed variants for codec and optimization coverage:
 
 - `release`: conservative first build
-- `release_aggressive`: closer to the optimized deployment style
+- `release_aggressive`: more aggressive optimization profile
 - `release_json_serial`: JSON on the controller UART
 - `release_msgpack_mqtt`: MessagePack on serial and MQTT
 - `release_json_serial_msgpack_mqtt`: JSON on serial, MessagePack on MQTT
@@ -107,10 +107,10 @@ void loop() {
 }
 ```
 
-Leaving `BridgeOptions::serial` unset resolves to `Serial2`. The other defaults disable
-Homie LED feedback, keep ESP32 Wi-Fi modem sleep disabled and use build-driven logging.
-Set the options explicitly when you want the firmware entry point to document those
-choices.
+Leaving `BridgeOptions::serial` unset resolves to `Serial2`. By default, the bridge also
+disables Homie LED feedback, keeps ESP32 Wi-Fi modem sleep disabled and uses
+build-driven logging. Set the options explicitly when you want the firmware entry point
+to document those choices.
 
 The full example lives in
 [examples/basic-homie-bridge](https://github.com/labodj/lsh-bridge/tree/main/examples/basic-homie-bridge).
@@ -133,7 +133,7 @@ Controller TTL UART
 Common ground shared by controller, buck converter, level shifter and ESP32.
 ```
 
-The bridge usually talks to the controller through a hardware UART, not through USB. On
+The bridge usually talks to the controller over a hardware UART rather than USB. On
 Controllino-style panels, the controller side is 5 V logic and the ESP32 side is 3.3 V
 logic, so the UART path needs a proper level shifter.
 
@@ -155,7 +155,8 @@ Runtime rules:
 - the bridge caches only validated topology, never runtime actuator state
 - startup uses cached topology when available, then asks the controller for fresh
   details and state
-- device-topic `PING` answers controller reachability only when the runtime is synced
+- device-topic `PING` answers controller reachability only when the runtime is
+  synchronized
 - service-topic `PING` answers bridge reachability on the bridge-local topic
 - topology changes are saved to NVS and followed by one controlled reboot
 - retained, fragmented, oversize or malformed MQTT commands are rejected and diagnosed
@@ -187,7 +188,7 @@ Use the bundled example as the starting point. The complete reference lives in
 - [DOCS.md](https://github.com/labodj/lsh-bridge/blob/main/DOCS.md): repository
   documentation map
 - [docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md):
-  startup, sync, diagnostics and MQTT behavior
+  startup, synchronization, diagnostics and MQTT behavior
 - [docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md):
   build flags and capacity policy
 - [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md):
@@ -195,7 +196,7 @@ Use the bundled example as the starting point. The complete reference lives in
 
 ## Compatibility
 
-Validated target:
+Validated baseline:
 
 - ESP32
 - Arduino framework
@@ -217,7 +218,8 @@ OTA updates only the application image (`firmware.bin`). It does not update boot
 partition table or other full-flash artifacts. If the ESP32 platform update changes
 those artifacts, validate them explicitly and use a full USB/serial flash when required.
 
-ESP8266 compatibility is not a design goal of this repository.
+This repository targets ESP32. ESP8266 support would need separate validation and
+support work.
 
 ## Maintainer Notes
 

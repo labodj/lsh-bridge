@@ -3,8 +3,8 @@
 This page is the navigation hub for `lsh-bridge`.
 
 Use it when you know the kind of answer you need, but not which document to open first.
-The README stays focused on adoption; the pages below hold the deeper runtime and
-configuration details.
+The README stays focused on the first-use path; the pages below hold the deeper runtime
+and configuration details.
 
 ## Start Here
 
@@ -14,7 +14,7 @@ configuration details.
   [examples/basic-homie-bridge](https://github.com/labodj/lsh-bridge/tree/main/examples/basic-homie-bridge).
 - **I need exact build flags**: read
   [docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md).
-- **I am debugging startup, sync or MQTT behavior**: read
+- **I am debugging startup, synchronization or MQTT behavior**: read
   [docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
 - **I want the whole LSH stack first**: start from the
   [`labo-smart-home` documentation map](https://github.com/labodj/labo-smart-home/blob/main/DOCS.md).

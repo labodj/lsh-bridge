@@ -1,8 +1,8 @@
 # Compile-time Configuration
 
 `lsh-bridge` is built for small ESP32 firmware images, fixed buffers and predictable
-runtime behavior. That is why capacities, topic names, serial settings, codecs and Homie
-identity are compile-time choices passed through PlatformIO `build_flags`.
+runtime behavior. Because of that, capacities, topic names, serial settings, codecs and
+Homie identity are compile-time choices passed through PlatformIO `build_flags`.
 
 Start from the bundled
 [basic Homie bridge example](https://github.com/labodj/lsh-bridge/tree/main/examples/basic-homie-bridge)
@@ -15,8 +15,8 @@ diagnostics, read
 For a first bring-up:
 
 - build the bundled `release` environment unchanged
-- keep the stock topic layout and service topic
-- keep the stock codec choices until the controller-to-MQTT path works once
+- keep the example topic layout and service topic
+- keep the example codec choices until the controller-to-MQTT path works once
 - make capacities large enough for the controller profile flashed into `lsh-core`
 - match serial baud exactly with the controller
 
@@ -31,8 +31,8 @@ one predictable successful boot first, then tune deliberately.
 | `CONFIG_MAX_BUTTONS`     | `12U`   | Maximum buttons or clickables accepted from the controller                                              |
 | `CONFIG_MAX_NAME_LENGTH` | `4U`    | Maximum controller device-name length; also contributes to MQTT topic buffer sizing                     |
 
-These limits are part of validation, not presentation. If the controller reports more
-resources than the bridge was compiled for, or a longer device name than
+These limits are validation rules, not display-only settings. If the controller reports
+more resources than the bridge was compiled for, or a longer device name than
 `CONFIG_MAX_NAME_LENGTH`, the bridge rejects the topology.
 
 ## Serial Bridge Settings
@@ -52,7 +52,7 @@ Internally the bridge keeps two serial size classes:
 - `SERIAL_MAX_RX_BYTES_PER_LOOP`: fairness budget for one bridge loop iteration
 
 Those values are derived from capacity limits and the selected codec. They are not
-public `CONFIG_*` knobs.
+public `CONFIG_*` settings.
 
 ## MQTT Topic Layout
 
@@ -66,8 +66,8 @@ public `CONFIG_*` knobs.
 | `CONFIG_MQTT_TOPIC_BRIDGE`  | `"bridge"`           | Bridge-local diagnostics and service-level replies                      |
 | `CONFIG_MQTT_TOPIC_SERVICE` | `"LSH/Node-RED/SRV"` | Broadcast/service topic subscribed independently from device name       |
 
-Topic buffer sizes are derived from these strings plus `CONFIG_MAX_NAME_LENGTH`. The
-current library does not expose public `CONFIG_MQTT_*_LENGTH` knobs.
+Topic buffer sizes are derived from these strings plus `CONFIG_MAX_NAME_LENGTH`.
+`lsh-bridge` does not expose public `CONFIG_MQTT_*_LENGTH` settings.
 
 ## Homie Convention and Identity
 
@@ -95,7 +95,7 @@ its firmware identity through macro concatenation.
 Keep the timeout slightly above the ping interval so one delayed ping does not
 immediately look like a disconnected controller.
 
-## Runtime Policy Knobs
+## Runtime Policy Settings
 
 | Macro                                        | Default                                | What it affects                                                                |
 | -------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------ |
@@ -111,11 +111,11 @@ immediately look like a disconnected controller.
 | `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER`    | `0`                                    | Default for `BridgeOptions::disableResetTrigger`                               |
 
 `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY` costs RAM directly because each queued command owns
-one fixed-size command buffer. `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP` is a fairness knob,
-not a capacity knob.
+one fixed-size command buffer. `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP` is a fairness
+setting, not a capacity setting.
 
-Leave Homie's physical reset trigger enabled for bench setup. For unattended bridge
-boards where GPIO0/BOOT must not act as a factory-reset input, set
+Leave Homie's physical reset trigger enabled for workbench bring-up. For unattended
+bridge boards where GPIO0/BOOT must not act as a factory-reset input, set
 `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER=1` or configure
 `BridgeOptions::disableResetTrigger`.
 
@@ -136,13 +136,13 @@ The MQTT side also keeps two size classes:
 - `MQTT_PUBLISH_MESSAGE_MAX_SIZE`: temporary buffer for outbound MQTT payloads,
   including retained `conf` topology publishes
 
-Only the outbound publish buffer scales with worst-case `DEVICE_DETAILS`; inbound
-commands do not pay that topology worst-case cost.
+The outbound publish buffer is the only buffer that scales with worst-case
+`DEVICE_DETAILS`; inbound commands do not pay that topology worst-case cost.
 
 ## Built-in Topology Cache
 
 `lsh-bridge` persists the last validated controller `DEVICE_DETAILS` snapshot in ESP32
-NVS. This behavior is built in and does not currently expose public `CONFIG_*` knobs.
+NVS. This behavior is built in and does not currently expose public `CONFIG_*` settings.
 
 Important details:
 
@@ -167,7 +167,7 @@ The compile-time limits that constrain this cache are `CONFIG_MAX_ACTUATORS`,
 
 If serial and MQTT use the same codec, the bridge can forward some inbound command
 payloads without re-encoding. If only one side uses MessagePack, the bridge deserializes
-and reserializes between formats.
+and serializes again between formats.
 
 Serial MessagePack framing affects only the controller link. MQTT payloads are not
 framed, and the logical LSH payload format stays the same.
@@ -177,7 +177,7 @@ framed, and the logical LSH payload format stays the same.
 `lsh-bridge` ships with a default
 [`include/etl_profile.h`](https://github.com/labodj/lsh-bridge/blob/main/include/etl_profile.h)
 for the standard Arduino/PlatformIO case. It keeps ETL compiler/platform detection on
-the official auto-detect path and applies only the bridge's default ETL policy flags.
+the normal auto-detect path and applies only the bridge's default ETL policy flags.
 
 If an embedding project needs different ETL behavior:
 
