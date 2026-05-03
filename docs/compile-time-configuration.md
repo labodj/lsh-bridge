@@ -75,7 +75,7 @@ Topic buffer sizes are derived from these strings plus `CONFIG_MAX_NAME_LENGTH`.
 | ------------------------------- | ----------------- | ------------------------------------------------------------- |
 | `HOMIE_CONVENTION_VERSION`      | required `5`      | Homie convention compiled by the `labodj/homie-v5` dependency |
 | `CONFIG_HOMIE_FIRMWARE_NAME`    | `"lsh-homie"`     | Firmware name exposed through Homie                           |
-| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.4.2"`         | Firmware version exposed through Homie                        |
+| `CONFIG_HOMIE_FIRMWARE_VERSION` | `"1.4.3"`         | Firmware version exposed through Homie                        |
 | `CONFIG_HOMIE_BRAND`            | `"LaboSmartHome"` | Homie brand string exposed by the bridge                      |
 
 `HOMIE_CONVENTION_VERSION=5` must be passed by the embedding PlatformIO environment. The
@@ -236,7 +236,7 @@ build_flags =
     -D CONFIG_MQTT_TOPIC_SERVICE=\"LSH/Node-RED/SRV\"
     -D HOMIE_CONVENTION_VERSION=5
     -D CONFIG_HOMIE_FIRMWARE_NAME=\"lsh-homie\"
-    -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.4.2\"
+    -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.4.3\"
     -D CONFIG_HOMIE_BRAND=\"LaboSmartHome\"
     -D CONFIG_PING_INTERVAL_CONTROLLINO_MS=10000U
     -D CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS=10200U
