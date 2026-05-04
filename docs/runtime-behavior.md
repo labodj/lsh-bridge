@@ -149,6 +149,9 @@ homie/5/<device>/$description
 Each cached controller actuator becomes one Homie node. Its canonical property is
 `state`, which is boolean, retained and settable.
 
+Retention is declared on the advertised Homie property metadata. State publishes rely on
+that property metadata instead of overriding the retain flag per message.
+
 Actuator commands are received on:
 
 ```text

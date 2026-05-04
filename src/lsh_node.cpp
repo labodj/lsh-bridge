@@ -95,7 +95,6 @@ auto LSHNode::sendState() const -> bool
     const auto packetId = this->setProperty(HOMIE_PROPERTY_ADVERTISE)
                               .overwriteSetter(false)
                               .setQos(1)
-                              .setRetained(true)
                               .send(utils::conversions::to_literal(stateToSend));
 
     if (packetId == 0U)

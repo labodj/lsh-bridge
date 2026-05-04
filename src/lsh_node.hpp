@@ -72,6 +72,7 @@ public:
         this->advertise(constants::homie::HOMIE_PROPERTY_ADVERTISE)
             .setName(this->homieId.c_str())
             .setDatatype(constants::homie::HOMIE_PROPERTY_DATATYPE_BOOLEAN)
+            .setRetained(true)
             .settable(
                 [this](const HomieRange &range, const String &value) -> bool
                 {

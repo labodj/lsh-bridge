@@ -81,6 +81,8 @@ Topic buffer sizes are derived from these strings plus `CONFIG_MAX_NAME_LENGTH`.
 `HOMIE_CONVENTION_VERSION=5` must be passed by the embedding PlatformIO environment. The
 Homie dependency compiles its own translation units, so it must see the same convention
 selector as `lsh-bridge`. The bridge rejects missing or legacy values at compile time.
+Use the Homie dependency declared by `lsh-bridge`; older manual pins may miss the v5
+description and property-retention behavior expected by the bridge.
 
 The identity macros must expand to string literals because the Homie dependency builds
 its firmware identity through macro concatenation.
