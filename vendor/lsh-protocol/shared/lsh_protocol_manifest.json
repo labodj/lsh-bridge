@@ -1,0 +1,57 @@
+{
+  "consumerArtifacts": [
+    {
+      "consumer": "lsh-core",
+      "path": "lsh-core/src/communication/constants/protocol.hpp",
+      "sha256": "8adbdb1a848ea8e1ba50af00145a70c2eef5eace1271e9a46ac971dc725b6549",
+      "target": "core"
+    },
+    {
+      "consumer": "lsh-core",
+      "path": "lsh-core/src/communication/constants/static_payloads.hpp",
+      "sha256": "87c96e752b9ac261a4970a0dd0c5498572310594295eebdeda54ac0e0f7e2e6a",
+      "target": "core"
+    },
+    {
+      "consumer": "lsh-bridge",
+      "path": "lsh-bridge/src/constants/communication_protocol.hpp",
+      "sha256": "4a0be50122385b67c0e1fa4296cbfcff43aacc02f1f831a4e0cc52b7fe5bcf38",
+      "target": "bridge"
+    },
+    {
+      "consumer": "lsh-bridge",
+      "path": "lsh-bridge/src/constants/payloads.hpp",
+      "sha256": "92afebe3c04516f626664761413f8a2b8408695f7f1180614de82610dee8f3bf",
+      "target": "bridge"
+    },
+    {
+      "consumer": "labo-smart-home-coordinator",
+      "path": "labo-smart-home-coordinator/src/generated/protocol.ts",
+      "sha256": "4a2cdf72eb76a21be5b160a9c00c939c6ebf8c88a9c40a28cb49b89beed4075e",
+      "target": "coordinator"
+    }
+  ],
+  "generatedArtifacts": [
+    {
+      "path": "shared/lsh_protocol.md",
+      "sha256": "d97bd4d4427fe4a8d20bfff1976f4f4611cd1a222f4bd25241567a8556e10aee"
+    },
+    {
+      "path": "shared/lsh_protocol.schema.json",
+      "sha256": "e670e34e5d189685b560d82dd0ab76c0722ee49b1d31de5a811735a2990248e0"
+    }
+  ],
+  "inputs": {
+    "goldenPayloads": {
+      "path": "shared/lsh_protocol_golden_payloads.json",
+      "sha256": "fb92784b3982aacfe3a2858eb1d7cba1f03991ceee7e6ccde37643711d8ffaa5"
+    },
+    "spec": {
+      "path": "shared/lsh_protocol.json",
+      "sha256": "933bba3c622026e24c1efc7b056ca07cf71d0eef5a376cc14bad3264a60d9b13"
+    }
+  },
+  "schema": "lsh-protocol-manifest/v1",
+  "specRevision": 2026050101,
+  "wireProtocolMajor": 3
+}

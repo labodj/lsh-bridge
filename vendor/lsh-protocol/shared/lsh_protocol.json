@@ -55,7 +55,7 @@
     {
       "name": "ACTUATORS_STATE",
       "value": 2,
-      "description": "Bitpacked actuator state payload."
+      "description": "Bit-packed actuator state payload."
     },
     {
       "name": "NETWORK_CLICK_REQUEST",

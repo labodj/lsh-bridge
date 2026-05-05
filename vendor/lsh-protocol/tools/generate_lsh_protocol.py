@@ -14,6 +14,7 @@ are derived from the shared specification.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -283,6 +284,29 @@ class GoldenPayloads:
                 raise SpecError(f"Golden payload '{name}' must be an object.")
             validated[name] = payload
         return cls(payloads=validated)
+
+    def validate_against_spec(self, spec: ProtocolSpec) -> None:
+        """Ensure golden examples cover every command and carry the right id."""
+
+        expected_names = {lower_camel_case(command.name): command for command in spec.commands}
+        missing = sorted(set(expected_names) - set(self.payloads))
+        if missing:
+            raise SpecError(f"Golden payload file is missing examples for: {', '.join(missing)}.")
+
+        extra = sorted(set(self.payloads) - set(expected_names))
+        if extra:
+            raise SpecError(f"Golden payload file contains unknown examples: {', '.join(extra)}.")
+
+        payload_key = spec.keys["KEY_PAYLOAD"]
+        for name, command in expected_names.items():
+            payload = self.payloads[name]
+            if not isinstance(payload, dict):
+                raise SpecError(f"Golden payload '{name}' must be an object.")
+            if payload.get(payload_key) != command.value:
+                raise SpecError(
+                    f"Golden payload '{name}' must use {payload_key}={command.value} "
+                    f"for command {command.name}."
+                )
 
 
 def require_object(raw: dict[str, object], key: str) -> dict[str, object]:
@@ -623,7 +647,7 @@ def protocol_key_description(key_name: str) -> str:
         "KEY_BUTTONS_ARRAY": "Button ID array.",
         "KEY_CORRELATION_ID": "Click correlation ID.",
         "KEY_ID": "Numeric actuator or button ID.",
-        "KEY_STATE": "Actuator state or bitpacked state bytes.",
+        "KEY_STATE": "Actuator state or bit-packed state bytes.",
         "KEY_TYPE": "Click type discriminator.",
     }
     return descriptions.get(key_name, "")
@@ -832,6 +856,243 @@ export enum LshProtocol {{
 """
 
 
+def _uint8_schema(*, positive: bool = False) -> dict[str, object]:
+    """Return the shared uint8 JSON Schema fragment."""
+
+    return {
+        "type": "integer",
+        "minimum": 1 if positive else 0,
+        "maximum": 255,
+    }
+
+
+def _static_command_payload_schema(command: CommandSpec, payload_key: str) -> dict[str, object]:
+    """Return a fixed-shape schema for one command-id-only payload."""
+
+    return {
+        "type": "object",
+        "properties": {payload_key: {"const": command.value}},
+        "required": [payload_key],
+        "additionalProperties": False,
+    }
+
+
+def render_json_schema(spec: ProtocolSpec) -> str:
+    """Render a JSON Schema for all base LSH protocol payloads."""
+
+    keys = spec.keys
+    payload_key = keys["KEY_PAYLOAD"]
+    protocol_major_key = keys["KEY_PROTOCOL_MAJOR"]
+    name_key = keys["KEY_NAME"]
+    actuators_key = keys["KEY_ACTUATORS_ARRAY"]
+    buttons_key = keys["KEY_BUTTONS_ARRAY"]
+    correlation_key = keys["KEY_CORRELATION_ID"]
+    id_key = keys["KEY_ID"]
+    state_key = keys["KEY_STATE"]
+    type_key = keys["KEY_TYPE"]
+    commands = spec.command_by_name()
+    click_values = [click.value for click in spec.click_types]
+
+    positive_uint8 = _uint8_schema(positive=True)
+    uint8 = _uint8_schema()
+    uint8_array = {"type": "array", "items": uint8}
+    positive_unique_uint8_array = {
+        "type": "array",
+        "items": positive_uint8,
+        "uniqueItems": True,
+    }
+
+    defs: dict[str, object] = {
+        "deviceDetails": {
+            "type": "object",
+            "properties": {
+                payload_key: {"const": commands["DEVICE_DETAILS"].value},
+                protocol_major_key: {"const": spec.wire_protocol_major},
+                name_key: {"type": "string", "minLength": 1},
+                actuators_key: positive_unique_uint8_array,
+                buttons_key: positive_unique_uint8_array,
+            },
+            "required": [payload_key, protocol_major_key, name_key, actuators_key, buttons_key],
+            "additionalProperties": False,
+        },
+        "actuatorsState": {
+            "type": "object",
+            "properties": {
+                payload_key: {"const": commands["ACTUATORS_STATE"].value},
+                state_key: uint8_array,
+            },
+            "required": [payload_key, state_key],
+            "additionalProperties": False,
+        },
+        "setState": {
+            "type": "object",
+            "properties": {
+                payload_key: {"const": commands["SET_STATE"].value},
+                state_key: uint8_array,
+            },
+            "required": [payload_key, state_key],
+            "additionalProperties": False,
+        },
+        "setSingleActuator": {
+            "type": "object",
+            "properties": {
+                payload_key: {"const": commands["SET_SINGLE_ACTUATOR"].value},
+                id_key: positive_uint8,
+                state_key: {"enum": [0, 1]},
+            },
+            "required": [payload_key, id_key, state_key],
+            "additionalProperties": False,
+        },
+    }
+
+    for command_name in (
+        "NETWORK_CLICK_REQUEST",
+        "NETWORK_CLICK_ACK",
+        "FAILOVER_CLICK",
+        "NETWORK_CLICK_CONFIRM",
+    ):
+        command = commands[command_name]
+        defs[lower_camel_case(command.name)] = {
+            "type": "object",
+            "properties": {
+                payload_key: {"const": command.value},
+                correlation_key: positive_uint8,
+                id_key: positive_uint8,
+                type_key: {"enum": click_values},
+            },
+            "required": [payload_key, correlation_key, id_key, type_key],
+            "additionalProperties": False,
+        }
+
+    for command_name in (
+        "BOOT",
+        "PING",
+        "REQUEST_DETAILS",
+        "REQUEST_STATE",
+        "FAILOVER",
+        "SYSTEM_REBOOT",
+        "SYSTEM_RESET",
+    ):
+        command = commands[command_name]
+        defs[lower_camel_case(command.name)] = _static_command_payload_schema(
+            command,
+            payload_key,
+        )
+
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://labodj.github.io/lsh-protocol/shared/lsh_protocol.schema.json",
+        "title": spec.name,
+        "description": "Generated JSON Schema for base LSH protocol payloads.",
+        "oneOf": [{"$ref": f"#/$defs/{name}"} for name in sorted(defs)],
+        "$defs": defs,
+    }
+    return json.dumps(schema, indent=2, sort_keys=True) + "\n"
+
+
+def consumer_artifact_outputs(spec: ProtocolSpec) -> list[dict[str, str]]:
+    """Return expected generated consumer artifacts and hashes for drift checks."""
+
+    outputs = [
+        {
+            "consumer": "lsh-core",
+            "target": TARGET_CORE,
+            "path": "lsh-core/src/communication/constants/protocol.hpp",
+            "content": render_cpp_protocol(
+                spec,
+                "LSH_CORE_COMMUNICATION_CONSTANTS_PROTOCOL_HPP",
+                "lsh::core",
+                file_name="protocol.hpp",
+            ),
+        },
+        {
+            "consumer": "lsh-core",
+            "target": TARGET_CORE,
+            "path": "lsh-core/src/communication/constants/static_payloads.hpp",
+            "content": render_cpp_static_payloads(
+                spec,
+                target=TARGET_CORE,
+                header_guard="LSH_CORE_COMMUNICATION_CONSTANTS_STATIC_PAYLOADS_HPP",
+                include_directive='#include "../../internal/etl_array.hpp"',
+                array_type="etl::array",
+                file_name="static_payloads.hpp",
+            ),
+        },
+        {
+            "consumer": "lsh-bridge",
+            "target": TARGET_BRIDGE,
+            "path": "lsh-bridge/src/constants/communication_protocol.hpp",
+            "content": render_cpp_protocol(
+                spec,
+                "LSH_BRIDGE_CONSTANTS_COMMUNICATION_PROTOCOL_HPP",
+                "lsh::bridge",
+                file_name="communication_protocol.hpp",
+            ),
+        },
+        {
+            "consumer": "lsh-bridge",
+            "target": TARGET_BRIDGE,
+            "path": "lsh-bridge/src/constants/payloads.hpp",
+            "content": render_cpp_static_payloads(
+                spec,
+                target=TARGET_BRIDGE,
+                header_guard="LSH_BRIDGE_CONSTANTS_PAYLOADS_HPP",
+                include_directive="#include <array>",
+                array_type="std::array",
+                file_name="payloads.hpp",
+            ),
+        },
+        {
+            "consumer": "labo-smart-home-coordinator",
+            "target": CLI_TARGET_COORDINATOR,
+            "path": "labo-smart-home-coordinator/src/generated/protocol.ts",
+            "content": render_ts_protocol(spec),
+        },
+    ]
+
+    return [
+        {
+            "consumer": output["consumer"],
+            "path": output["path"],
+            "sha256": sha256_text(output["content"]),
+            "target": output["target"],
+        }
+        for output in outputs
+    ]
+
+
+def render_protocol_manifest(
+    spec: ProtocolSpec,
+    outputs: Sequence[tuple[Path, str]],
+) -> str:
+    """Render a drift manifest for shared inputs and generated artifacts."""
+
+    manifest = {
+        "schema": "lsh-protocol-manifest/v1",
+        "specRevision": spec.spec_revision,
+        "wireProtocolMajor": spec.wire_protocol_major,
+        "inputs": {
+            "spec": {
+                "path": describe_path(SPEC_PATH),
+                "sha256": sha256_file(SPEC_PATH),
+            },
+            "goldenPayloads": {
+                "path": describe_path(GOLDEN_PAYLOADS_PATH),
+                "sha256": sha256_file(GOLDEN_PAYLOADS_PATH),
+            },
+        },
+        "generatedArtifacts": [
+            {
+                "path": describe_path(path),
+                "sha256": sha256_text(content),
+            }
+            for path, content in outputs
+        ],
+        "consumerArtifacts": consumer_artifact_outputs(spec),
+    }
+    return json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+
+
 def render_protocol_markdown(spec: ProtocolSpec, golden_payloads: GoldenPayloads) -> str:
     """Render a human-readable Markdown protocol reference."""
 
@@ -1015,6 +1276,19 @@ def describe_path(path: Path) -> str:
         return str(path)
 
 
+def sha256_file(path: Path) -> str:
+    """Return the SHA-256 digest of a local file."""
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sha256_text(content: str) -> str:
+    """Return the SHA-256 digest of generated text content."""
+
+    normalized_content = content if content.endswith("\n") else f"{content}\n"
+    return hashlib.sha256(normalized_content.encode("utf-8")).hexdigest()
+
+
 def generated_outputs(
     spec: ProtocolSpec,
     golden_payloads: GoldenPayloads,
@@ -1029,14 +1303,22 @@ def generated_outputs(
     """Return the generated files requested by the selected targets."""
 
     outputs: list[tuple[Path, str]] = []
+    shared_manifest_root: Path | None = None
 
     for target in selected_targets:
         if target == CLI_TARGET_SHARED_DOC:
             root = shared_doc_root or ROOT
+            shared_manifest_root = root
             outputs.append(
                 (
                     root / "shared" / "lsh_protocol.md",
                     render_protocol_markdown(spec, golden_payloads),
+                )
+            )
+            outputs.append(
+                (
+                    root / "shared" / "lsh_protocol.schema.json",
+                    render_json_schema(spec),
                 )
             )
             continue
@@ -1123,6 +1405,14 @@ def generated_outputs(
 
         raise SpecError(f"Unknown target '{target}'. Valid targets: {', '.join(VALID_CLI_TARGETS)}.")
 
+    if shared_manifest_root is not None:
+        outputs.append(
+            (
+                shared_manifest_root / "shared" / "lsh_protocol_manifest.json",
+                render_protocol_manifest(spec, outputs),
+            )
+        )
+
     return outputs
 
 
@@ -1154,6 +1444,7 @@ def run(
 
     spec = load_spec()
     golden_payloads = load_golden_payloads()
+    golden_payloads.validate_against_spec(spec)
     stale_files: list[Path] = []
     updated_files: list[Path] = []
 

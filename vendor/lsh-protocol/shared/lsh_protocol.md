@@ -71,7 +71,7 @@ clearer constant names, but the payload itself must use the wire keys shown here
 | `KEY_BUTTONS_ARRAY`   | `b`      | Button ID array.                                                  |
 | `KEY_CORRELATION_ID`  | `c`      | Click correlation ID.                                             |
 | `KEY_ID`              | `i`      | Numeric actuator or button ID.                                    |
-| `KEY_STATE`           | `s`      | Actuator state or bitpacked state bytes.                          |
+| `KEY_STATE`           | `s`      | Actuator state or bit-packed state bytes.                         |
 | `KEY_TYPE`            | `t`      | Click type discriminator.                                         |
 
 ## Commands
@@ -83,7 +83,7 @@ for each target repository.
 | Value | C++                     | TypeScript              | Golden JSON Example                        | Description                                                                                   |
 | ----- | ----------------------- | ----------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
 | 1     | `DEVICE_DETAILS`        | `DEVICE_DETAILS`        | `{"p":1,"v":3,"n":"c1","a":[1,5],"b":[7]}` | Device details payload with handshake-only protocol major used for wire compatibility checks. |
-| 2     | `ACTUATORS_STATE`       | `ACTUATORS_STATE`       | `{"p":2,"s":[90,3]}`                       | Bitpacked actuator state payload.                                                             |
+| 2     | `ACTUATORS_STATE`       | `ACTUATORS_STATE`       | `{"p":2,"s":[90,3]}`                       | Bit-packed actuator state payload.                                                            |
 | 3     | `NETWORK_CLICK_REQUEST` | `NETWORK_CLICK_REQUEST` | `{"p":3,"c":42,"i":7,"t":1}`               | Network click request with correlation ID.                                                    |
 | 4     | `BOOT`                  | `BOOT`                  | `{"p":4}`                                  | Controller boot notification and re-sync trigger. Does not carry version metadata.            |
 | 5     | `PING_`                 | `PING`                  | `{"p":5}`                                  | Ping or heartbeat payload.                                                                    |

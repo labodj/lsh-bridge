@@ -10,12 +10,17 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   validate-generated-shared-doc:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - name: Checkout repository
@@ -31,6 +36,7 @@ jobs:
 
   lint-markdown:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - name: Checkout repository
@@ -39,7 +45,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "lts/*"
 
       - name: Lint Markdown
         run: npx --yes markdownlint-cli2@0.22.1
@@ -47,6 +53,7 @@ jobs:
   smoke-test-all-target-generators:
     needs: validate-generated-shared-doc
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - name: Checkout repository
@@ -71,13 +78,93 @@ jobs:
             --node-red-root "${RUNNER_TEMP}/node-red-contrib-lsh-logic" \
             --coordinator-root "${RUNNER_TEMP}/labo-smart-home-coordinator"
 
+  cross-repo-protocol-drift:
+    needs: validate-generated-shared-doc
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout protocol
+        uses: actions/checkout@v6
+        with:
+          path: lsh-protocol
+
+      - name: Checkout lsh-core
+        uses: actions/checkout@v6
+        with:
+          repository: labodj/lsh-core
+          path: lsh-core
+          submodules: "recursive"
+
+      - name: Checkout lsh-bridge
+        uses: actions/checkout@v6
+        with:
+          repository: labodj/lsh-bridge
+          path: lsh-bridge
+          submodules: "recursive"
+
+      - name: Checkout coordinator
+        uses: actions/checkout@v6
+        with:
+          repository: labodj/labo-smart-home-coordinator
+          path: labo-smart-home-coordinator
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Validate generated consumer protocol artifacts
+        run: |
+          python3 lsh-protocol/tools/generate_lsh_protocol.py \
+            --target core \
+            --target bridge \
+            --target coordinator \
+            --core-root lsh-core \
+            --bridge-root lsh-bridge \
+            --coordinator-root labo-smart-home-coordinator \
+            --check
+
+      - name: Validate manifest consumer hashes
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+
+          root = pathlib.Path(".")
+          manifest = json.loads(
+              (root / "lsh-protocol/shared/lsh_protocol_manifest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+
+          errors = []
+          for artifact in manifest["consumerArtifacts"]:
+              path = root / artifact["path"]
+              if not path.exists():
+                  errors.append(f"missing consumer artifact: {artifact['path']}")
+                  continue
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              if digest != artifact["sha256"]:
+                  errors.append(
+                      f"hash mismatch for {artifact['path']}: "
+                      f"expected {artifact['sha256']}, got {digest}"
+                  )
+
+          if errors:
+              raise SystemExit("\n".join(errors))
+          PY
+
   release:
     needs:
       - validate-generated-shared-doc
       - lint-markdown
       - smoke-test-all-target-generators
+      - cross-repo-protocol-drift
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
 
@@ -86,7 +173,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: lsh-protocol ${{ github.ref_name }}
           generate_release_notes: true
