@@ -1,0 +1,371 @@
+{
+  "$defs": {
+    "actuatorsState": {
+      "additionalProperties": false,
+      "properties": {
+        "p": {
+          "const": 2
+        },
+        "s": {
+          "items": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "p",
+        "s"
+      ],
+      "type": "object"
+    },
+    "boot": {
+      "additionalProperties": false,
+      "properties": {
+        "p": {
+          "const": 4
+        }
+      },
+      "required": [
+        "p"
+      ],
+      "type": "object"
+    },
+    "deviceDetails": {
+      "additionalProperties": false,
+      "properties": {
+        "a": {
+          "items": {
+            "maximum": 255,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "b": {
+          "items": {
+            "maximum": 255,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "n": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "p": {
+          "const": 1
+        },
+        "v": {
+          "const": 3
+        }
+      },
+      "required": [
+        "p",
+        "v",
+        "n",
+        "a",
+        "b"
+      ],
+      "type": "object"
+    },
+    "failover": {
+      "additionalProperties": false,
+      "properties": {
+        "p": {
+          "const": 15
+        }
+      },
+      "required": [
+        "p"
+      ],
+      "type": "object"
+    },
+    "failoverClick": {
+      "additionalProperties": false,
+      "properties": {
+        "c": {
+          "maximum": 255,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "i": {
+          "maximum": 255,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "p": {
+          "const": 16
+        },
+        "t": {
+          "enum": [
+            1,
+            2
+          ]
+        }
+      },
+      "required": [
+        "p",
+        "c",
+        "i",
+        "t"
+      ],
+      "type": "object"
+    },
+    "networkClickAck": {
+      "additionalProperties": false,
+      "properties": {
+        "c": {
+          "maximum": 255,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "i": {
+          "maximum": 255,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "p": {
+          "const": 14
+        },
+        "t": {
+          "enum": [
+            1,
+            2
+          ]
+        }
+      },
+      "required": [
+        "p",
+        "c",
+        "i",
+        "t"
+      ],
+      "type": "object"
+    },
+    "networkClickConfirm": {
+      "additionalProperties": false,
+      "properties": {
+        "c": {
+          "maximum": 255,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "i": {
+          "maximum": 255,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "p": {
+          "const": 17
+        },
+        "t": {
+          "enum": [
+            1,
+            2
+          ]
+        }
+      },
+      "required": [
+        "p",
+        "c",
+        "i",
+        "t"
+      ],
+      "type": "object"
+    },
+    "networkClickRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "c": {
+          "maximum": 255,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "i": {
+          "maximum": 255,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "p": {
+          "const": 3
+        },
+        "t": {
+          "enum": [
+            1,
+            2
+          ]
+        }
+      },
+      "required": [
+        "p",
+        "c",
+        "i",
+        "t"
+      ],
+      "type": "object"
+    },
+    "ping": {
+      "additionalProperties": false,
+      "properties": {
+        "p": {
+          "const": 5
+        }
+      },
+      "required": [
+        "p"
+      ],
+      "type": "object"
+    },
+    "requestDetails": {
+      "additionalProperties": false,
+      "properties": {
+        "p": {
+          "const": 10
+        }
+      },
+      "required": [
+        "p"
+      ],
+      "type": "object"
+    },
+    "requestState": {
+      "additionalProperties": false,
+      "properties": {
+        "p": {
+          "const": 11
+        }
+      },
+      "required": [
+        "p"
+      ],
+      "type": "object"
+    },
+    "setSingleActuator": {
+      "additionalProperties": false,
+      "properties": {
+        "i": {
+          "maximum": 255,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "p": {
+          "const": 13
+        },
+        "s": {
+          "enum": [
+            0,
+            1
+          ]
+        }
+      },
+      "required": [
+        "p",
+        "i",
+        "s"
+      ],
+      "type": "object"
+    },
+    "setState": {
+      "additionalProperties": false,
+      "properties": {
+        "p": {
+          "const": 12
+        },
+        "s": {
+          "items": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "p",
+        "s"
+      ],
+      "type": "object"
+    },
+    "systemReboot": {
+      "additionalProperties": false,
+      "properties": {
+        "p": {
+          "const": 254
+        }
+      },
+      "required": [
+        "p"
+      ],
+      "type": "object"
+    },
+    "systemReset": {
+      "additionalProperties": false,
+      "properties": {
+        "p": {
+          "const": 255
+        }
+      },
+      "required": [
+        "p"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://labodj.github.io/lsh-protocol/shared/lsh_protocol.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Generated JSON Schema for base LSH protocol payloads.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/actuatorsState"
+    },
+    {
+      "$ref": "#/$defs/boot"
+    },
+    {
+      "$ref": "#/$defs/deviceDetails"
+    },
+    {
+      "$ref": "#/$defs/failover"
+    },
+    {
+      "$ref": "#/$defs/failoverClick"
+    },
+    {
+      "$ref": "#/$defs/networkClickAck"
+    },
+    {
+      "$ref": "#/$defs/networkClickConfirm"
+    },
+    {
+      "$ref": "#/$defs/networkClickRequest"
+    },
+    {
+      "$ref": "#/$defs/ping"
+    },
+    {
+      "$ref": "#/$defs/requestDetails"
+    },
+    {
+      "$ref": "#/$defs/requestState"
+    },
+    {
+      "$ref": "#/$defs/setSingleActuator"
+    },
+    {
+      "$ref": "#/$defs/setState"
+    },
+    {
+      "$ref": "#/$defs/systemReboot"
+    },
+    {
+      "$ref": "#/$defs/systemReset"
+    }
+  ],
+  "title": "LSH Protocol"
+}

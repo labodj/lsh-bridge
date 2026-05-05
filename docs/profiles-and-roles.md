@@ -9,7 +9,7 @@ guide explains how to think about those messages when you build a real system:
 which peer owns state, what is local to one hop, what can be cached, and what a
 bridge or automation runtime is allowed to decide for itself.
 
-If you are implementing LSH outside the original stack, read this page before
+If you are implementing LSH outside the public stack, read this page before
 mapping the protocol onto your own transport.
 
 For the full repository documentation map, start from
@@ -17,8 +17,8 @@ For the full repository documentation map, start from
 
 ## The Short Version
 
-The base LSH protocol is compact and small on purpose. It defines messages, not
-a mandatory product topology.
+The base LSH protocol is compact by design. It defines messages, not a mandatory
+product topology.
 
 It does not require this shape:
 
@@ -35,14 +35,15 @@ An LSH implementation may be:
 - a bridge that translates serial frames into MQTT payloads
 - a standalone coordinator consuming MQTT
 - a Node-RED wrapper around a standalone coordinator
-- a third-party gateway with its own transport and caching policy
+- an external gateway with its own transport and caching policy
 
 As long as the command IDs, payload shapes, compatibility rules, and documented
-semantics are respected, the implementation can still be a valid LSH peer.
+semantics are respected, the implementation can still speak the shared LSH
+protocol.
 
 ## Think In Immediate Peers
 
-The most useful mental model is this:
+A useful mental model is this:
 
 > Every LSH message is exchanged between two immediate peers on one transport.
 
@@ -59,8 +60,8 @@ does not automatically say whether the command must be forwarded, answered from
 cache, translated, or collapsed into another operation. Those choices belong to
 a profile.
 
-That distinction is what keeps the protocol reusable. A simple one-hop MQTT
-device should not have to inherit every rule from a serial bridge deployment.
+That distinction keeps the protocol reusable. A simple one-hop MQTT device does
+not need to inherit every rule from a serial bridge deployment.
 
 ## Roles
 
@@ -129,14 +130,14 @@ the protocol and coordination logic in one reusable library.
 
 ## Commands That Need Care
 
-Most LSH commands are intentionally simple. These are the ones where semantics
-matter most in multi-hop deployments.
+Most LSH commands are intentionally simple. The commands below need extra care
+in multi-hop deployments.
 
 ### `DEVICE_DETAILS`
 
 `DEVICE_DETAILS` is the authoritative topology snapshot for the current session.
 
-Consumers should not invent topology details that were never announced. They may
+Consumers should not invent topology details that were never announced. They can
 decorate or project the topology for a UI or automation engine, but the
 underlying device model comes from the latest trusted `DEVICE_DETAILS`.
 
@@ -195,7 +196,7 @@ that behavior must be explicit.
 
 A profile is the layer between the raw protocol and a concrete deployment.
 
-A good profile answers practical questions:
+A clear profile answers practical questions:
 
 - Which peer is authoritative on this transport?
 - Which commands may be answered from cache?
@@ -238,12 +239,12 @@ The MQTT topic split is also explicit:
 - `LSH/<device>/events` carries controller-backed runtime traffic
 - `LSH/<device>/bridge` carries bridge-local runtime traffic
 
-Those are profile choices. They are useful for the public stack, but they are
+Those are profile choices. They fit the public stack, but they are
 not mandatory rules for every future LSH implementation.
 
-## Direct Implementation Without a Bridge
+## External Implementation Without a Bridge
 
-A third-party implementation can speak LSH directly.
+An external implementation can speak LSH directly.
 
 For example, a networked controller could:
 
@@ -258,7 +259,7 @@ rules, and hop-local semantics.
 
 ## Practical Implementation Advice
 
-For robust integrations:
+For reliable integrations:
 
 - Treat `DEVICE_DETAILS` as the topology authority.
 - Treat `ACTUATORS_STATE` as the runtime state authority.
@@ -270,7 +271,7 @@ For robust integrations:
 
 ## Suggested Reading Order
 
-When implementing LSH from scratch:
+When implementing a new LSH peer:
 
 1. Read [shared/lsh_protocol.md](../shared/lsh_protocol.md).
 2. Read the roles and command notes in this document.

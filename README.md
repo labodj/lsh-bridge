@@ -4,11 +4,11 @@
 [![Latest Release](https://img.shields.io/github/v/release/labodj/lsh-protocol?display_name=tag&sort=semver)](https://github.com/labodj/lsh-protocol/releases/latest)
 [![License](https://img.shields.io/github/license/labodj/lsh-protocol.svg)](https://github.com/labodj/lsh-protocol/blob/main/LICENSE)
 
-`lsh-protocol` is the small shared contract that keeps the LSH ecosystem
-speaking the same language.
+`lsh-protocol` is the shared contract that keeps the public LSH repositories
+aligned on the same wire format.
 
 It does not contain firmware logic, Node-RED flows, automation rules, or device
-configuration. It contains the part that has to stay identical everywhere: wire
+configuration. It contains the part that needs to stay identical everywhere: wire
 keys, command IDs, click IDs, golden payloads, compatibility metadata, and the
 generator that turns those definitions into code for the public LSH projects.
 
@@ -32,7 +32,7 @@ The current public stack is documented from the user-facing side here:
 - [LSH FAQ](https://github.com/labodj/labo-smart-home/blob/main/FAQ.md)
 
 This repository stays lower level. It explains the contract and gives maintainers
-one place to update it without hand-editing each consumer.
+one place to update it before regenerating the consumer-specific outputs.
 
 ## Documentation
 
@@ -40,15 +40,17 @@ The full documentation map lives in [DOCS.md](./DOCS.md). Start there when you
 need to choose between the generated wire reference, the hand-written roles
 guide, and the consumer integration flow.
 
-For the shortest path:
+For a practical reading path:
 
 - read [profiles and roles](./docs/profiles-and-roles.md) before designing a
   bridge, gateway, or coordinator;
 - keep [the generated reference](./shared/lsh_protocol.md) open when writing
   encoders, decoders, tests, or generated constants;
+- use [the generated JSON Schema](./shared/lsh_protocol.schema.json) when
+  validating payload fixtures or external integrations;
 - use the
   [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
-  for the current public MQTT/Homie/Node-RED profile.
+  for the current public MQTT/Homie orchestration profile.
 
 ## Repository Contents
 
@@ -58,6 +60,12 @@ For the shortest path:
   Human-readable golden examples used by tests, generated docs, and consumers.
 - `shared/lsh_protocol.md`
   Generated reference documentation. Do not edit it by hand.
+- `shared/lsh_protocol.schema.json`
+  Generated JSON Schema for base protocol payload validation. Do not edit it by
+  hand.
+- `shared/lsh_protocol_manifest.json`
+  Generated drift manifest containing input, shared artifact, and expected
+  consumer artifact SHA-256 hashes. Do not edit it by hand.
 - `DOCS.md`
   The documentation map for this repository.
 - `docs/profiles-and-roles.md`
@@ -83,11 +91,12 @@ This repo does not own:
 - firmware behavior
 - bridge policy
 - Node-RED business logic
-- Home Assistant or Homie projection
+- Homie projection or Home Assistant discovery
 - physical device configuration
 
-That separation matters. A protocol repository should be predictable, stable,
-and hard to misread. Product behavior belongs in the product repositories.
+That separation matters. A protocol repository should be predictable, stable, and
+easy to audit. Runtime behavior belongs in the repositories that implement the
+protocol.
 
 ## Compatibility Model
 
@@ -123,9 +132,9 @@ The current shared transport rules are:
 - MQTT JSON: raw JSON payload
 - MQTT MsgPack: raw MsgPack payload
 
-The base protocol does not decide how many hops your deployment has, whether a
-bridge exists, whether commands are forwarded, or how state is projected into
-Homie or Home Assistant. Those are profile decisions.
+The base protocol does not decide how many hops a deployment has, whether a
+bridge exists, whether commands are forwarded, how state is projected into
+Homie, or how Home Assistant discovery is handled. Those are profile decisions.
 
 ## Trusted Environment
 
@@ -141,7 +150,7 @@ TLS, network isolation, serial trust boundaries, and operating-system controls.
 Each consumer repository vendors this repo at `vendor/lsh-protocol` through
 `git subtree`.
 
-For stable third-party integrations, vendor a released tag:
+For stable external integrations, vendor a released tag:
 
 ```bash
 git remote add lsh-protocol git@github.com:labodj/lsh-protocol.git || git remote set-url lsh-protocol git@github.com:labodj/lsh-protocol.git
@@ -186,11 +195,21 @@ Generate the shared Markdown reference in this repository:
 python3 tools/generate_lsh_protocol.py
 ```
 
+The default `shared-doc` target writes these generated files:
+
+- `shared/lsh_protocol.md`
+- `shared/lsh_protocol.schema.json`
+- `shared/lsh_protocol_manifest.json`
+
 Check that generated files are up to date:
 
 ```bash
 python3 tools/generate_lsh_protocol.py --check
 ```
+
+CI also checks generated protocol files in the public consumer repositories
+(`lsh-core`, `lsh-bridge`, and `labo-smart-home-coordinator`) and verifies their
+hashes against `shared/lsh_protocol_manifest.json`.
 
 Generate outputs for the public consumers:
 
@@ -214,11 +233,11 @@ Target meanings:
 - `bridge` writes C++ headers for `lsh-bridge`.
 - `coordinator` writes TypeScript protocol constants for the standalone
   coordinator package.
-- `node-red` writes TypeScript protocol constants for packages that consume the
+- `node-red` writes TypeScript protocol constants for packages that consume this
   protocol directly from a Node-RED repository.
 
-The `node-red` target is retained for direct Node-RED package consumption. The
-preferred direction for new LSH automation work is to keep protocol logic inside
+The `node-red` target is retained for direct Node-RED package consumption. For
+new LSH automation work, the preferred direction is to keep protocol logic inside
 `labo-smart-home-coordinator` and let Node-RED wrap that library.
 
 ## Maintainer Flow
@@ -229,10 +248,12 @@ When the wire contract changes:
 2. Update `shared/lsh_protocol_golden_payloads.json` if examples changed.
 3. Run `python3 tools/generate_lsh_protocol.py`.
 4. Run `python3 tools/generate_lsh_protocol.py --check`.
-5. Propagate the vendored protocol copy into consumer repositories.
-6. Run each consumer's protocol update/check command.
-7. Commit the spec, generated docs, and consumer-generated outputs together in
-   the appropriate repositories.
+5. Confirm the manifest changed only because the spec, golden examples, shared
+   artifacts, or expected consumer artifacts changed.
+6. Propagate the vendored protocol copy into consumer repositories.
+7. Run each consumer's protocol update/check command.
+8. Commit the spec, generated docs, schema, manifest, and consumer-generated
+   outputs together in the appropriate repositories.
 
 ## Versioning
 

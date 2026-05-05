@@ -1,8 +1,8 @@
 # Documentation
 
 This repository is the shared LSH protocol contract. It is intentionally smaller
-than the product repositories: it defines the wire facts that every consumer must
-read the same way.
+than the product repositories: it defines the wire facts that every consumer
+needs to read the same way.
 
 Use this page as the documentation map. The README gives the overview; the
 generated reference gives exact values; the profiles guide explains how those
@@ -19,7 +19,7 @@ Read these in order if you are new to the protocol:
 3. [Generated protocol reference](shared/lsh_protocol.md) when you need exact
    command IDs, compact JSON keys, payload examples, or generated static bytes.
 
-That path is enough before touching a consumer repository.
+That path gives you the context you need before touching a consumer repository.
 
 ## Common Tasks
 
@@ -55,16 +55,16 @@ semantics.
 
 This repo owns:
 
-- wire command IDs;
-- compact JSON keys;
-- click type IDs;
-- wire compatibility metadata;
-- golden payload examples;
-- generated protocol documentation;
-- role-neutral guidance for implementers.
+- wire command IDs
+- compact JSON keys
+- click type IDs
+- wire compatibility metadata
+- golden payload examples
+- generated protocol documentation
+- role-neutral guidance for implementers
 
-It does not own firmware policy, bridge policy, Node-RED behavior, Home
-Assistant projection, Homie projection, or physical device configuration. Those
+It does not own firmware policy, bridge policy, Node-RED behavior, Homie
+projection, Home Assistant discovery, or physical device configuration. Those
 decisions live in the repositories that implement the protocol.
 
 ## Editing Rule of Thumb
