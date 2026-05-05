@@ -1,0 +1,13 @@
+*
+!README.md
+!DOCS.md
+!docs/
+!docs/compile-time-configuration.md
+!docs/runtime-behavior.md
+!.github/
+!.github/workflows/
+!.github/workflows/ci.yml
+!.markdownlint-cli2.yaml
+!.prettierrc.json
+!package.json
+!library.json

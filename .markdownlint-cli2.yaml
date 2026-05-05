@@ -1,0 +1,17 @@
+config:
+  default: true
+  MD013:
+    line_length: 88
+    code_blocks: false
+    tables: false
+    headings: false
+  MD033: false
+  MD041: false
+globs:
+  - "README.md"
+  - "DOCS.md"
+  - "docs/compile-time-configuration.md"
+  - "docs/runtime-behavior.md"
+noBanner: true
+noProgress: true
+gitignore: true

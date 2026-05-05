@@ -111,8 +111,7 @@ auto MqttCommandQueue::enqueue(MqttCommandSource source, const char *payload, st
 
     bool wasQueued = false;
     portENTER_CRITICAL(&this->queueMux);
-    if (slot.state == MqttCommandSlotState::Writing && slot.generation == reservedGeneration &&
-        reservedGeneration == this->queueGeneration)
+    if (slot.state == MqttCommandSlotState::Writing && slot.generation == reservedGeneration && reservedGeneration == this->queueGeneration)
     {
         slot.source = source;
         slot.length = static_cast<std::uint16_t>(payloadLength);
@@ -158,8 +157,7 @@ auto MqttCommandQueue::dequeue(QueuedMqttCommand &outCommand) -> bool
         for (std::uint8_t index = 0U; index < constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY; ++index)
         {
             const auto &slot = this->queue[index];
-            if (slot.state != MqttCommandSlotState::Free &&
-                (!hasOldestSlot || sequenceBefore(slot.sequence, oldestSequence)))
+            if (slot.state != MqttCommandSlotState::Free && (!hasOldestSlot || sequenceBefore(slot.sequence, oldestSequence)))
             {
                 oldestIndex = index;
                 oldestSequence = slot.sequence;

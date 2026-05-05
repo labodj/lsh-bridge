@@ -1,0 +1,19 @@
+{
+  "name": "lsh-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "format": "prettier --write README.md DOCS.md docs/compile-time-configuration.md docs/runtime-behavior.md .github/workflows/ci.yml .markdownlint-cli2.yaml .prettierrc.json package.json library.json && npm run format:cpp",
+    "format:check": "prettier --check README.md DOCS.md docs/compile-time-configuration.md docs/runtime-behavior.md .github/workflows/ci.yml .markdownlint-cli2.yaml .prettierrc.json package.json library.json",
+    "lint:md": "markdownlint-cli2 README.md DOCS.md docs/compile-time-configuration.md docs/runtime-behavior.md",
+    "lint:md:fix": "markdownlint-cli2 --fix README.md DOCS.md docs/compile-time-configuration.md docs/runtime-behavior.md",
+    "format:cpp": "uv run python tools/check_cpp_format.py --write",
+    "format:cpp:check": "uv run python tools/check_cpp_format.py",
+    "check": "npm run format:check && npm run lint:md && npm run format:cpp:check",
+    "fix": "npm run format && npm run lint:md:fix"
+  },
+  "devDependencies": {
+    "markdownlint-cli2": "^0.22.1",
+    "prettier": "^3.8.3"
+  }
+}

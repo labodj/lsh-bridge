@@ -68,8 +68,8 @@ enum class MqttCommandSlotState : std::uint8_t
  */
 struct QueuedMqttCommand
 {
-    MqttCommandSource source = MqttCommandSource::Device;  //!< Topic family that produced this command.
-    std::uint16_t length = 0U;                             //!< Number of valid bytes currently stored in `payload`.
+    MqttCommandSource source = MqttCommandSource::Device;     //!< Topic family that produced this command.
+    std::uint16_t length = 0U;                                //!< Number of valid bytes currently stored in `payload`.
     MqttCommandSlotState state = MqttCommandSlotState::Free;  //!< Internal slot lifecycle, ignored for stack-local command copies.
     std::uint16_t generation = 0U;  //!< Queue generation that reserved this slot, used to reject stale commits after clear().
     std::uint16_t sequence = 0U;    //!< Reservation order, used to preserve command ordering while copies happen outside the lock.

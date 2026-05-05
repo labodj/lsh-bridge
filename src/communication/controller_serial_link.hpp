@@ -89,7 +89,8 @@ private:
     // It is intentionally separate from VirtualDevice, which stores only the last
     // controller-confirmed authoritative state.
     DesiredActuatorStateBitset desiredActuatorStates{};  //!< Desired-state shadow used only to build the next outbound `SET_STATE` batch.
-    ActuatorStateMask desiredDirtyActuators{};  //!< Outbound per-actuator mask for remote intent not yet confirmed by an authoritative controller state frame.
+    ActuatorStateMask
+        desiredDirtyActuators{};  //!< Outbound per-actuator mask for remote intent not yet confirmed by an authoritative controller state frame.
     std::uint16_t pendingActuatorMutationCount = 0U;   //!< Number of accepted non-duplicate changes merged into the current batch.
     std::uint16_t actuatorCommandBatchRevision = 0U;   //!< Monotonic guard used to avoid committing stale snapshots after serial TX.
     SemaphoreHandle_t actuatorCommandMutex = nullptr;  //!< Blocking mutex that protects the desired-state shadow across short serial sends.
@@ -210,10 +211,9 @@ public:
                                       std::uint16_t rejectedStageFailedCommands);
 
     [[nodiscard]] auto triggerFailoverFromReceivedClick() -> constants::DeserializeExitCode;
-    [[nodiscard]] auto sendClickCommand(lsh::bridge::protocol::Command command,
-                                        std::uint8_t clickType,
-                                        std::uint8_t clickableId,
-                                        std::uint8_t correlationId) -> bool;
+    [[nodiscard]] auto
+    sendClickCommand(lsh::bridge::protocol::Command command, std::uint8_t clickType, std::uint8_t clickableId, std::uint8_t correlationId)
+        -> bool;
 
     [[nodiscard]] auto isConnected() const -> bool;
 };
