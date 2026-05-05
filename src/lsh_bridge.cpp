@@ -467,6 +467,7 @@ public:
     bool topologyChangedDiagnosticPending =
         false;  //!< True while `topology_changed` still needs one best-effort MQTT publish before reboot.
     bool bridgeBreadcrumbDiagnosticPending = false;  //!< True while the previous-boot loop breadcrumb still needs to be published.
+    bool mqttMirrorFreshThisSession = false;         //!< True after this MQTT session published a complete fresh retained mirror.
     std::uint32_t lastMqttResyncAttemptMs = 0U;      //!< Real-time timestamp of the last autonomous MQTT-side resync attempt.
     std::uint32_t topologyRebootPendingSinceMs =
         0U;  //!< Real-time timestamp of the successful topology save that started the reboot window.
@@ -642,6 +643,7 @@ public:
      */
     void enterWaitingForDetails()
     {
+        mqttMirrorFreshThisSession = false;
         runtime::enterWaitingForDetails(controllerSerialLink, virtualDevice, runtimeState);
     }
 
@@ -655,6 +657,7 @@ public:
      */
     void enterWaitingForState()
     {
+        mqttMirrorFreshThisSession = false;
         runtime::enterWaitingForState(controllerSerialLink, virtualDevice, runtimeState);
     }
 
@@ -671,6 +674,7 @@ public:
      */
     void stageTopologyMigration(const DeviceDetailsSnapshot &details)
     {
+        mqttMirrorFreshThisSession = false;
         runtime::stageTopologyMigration(controllerSerialLink, virtualDevice, runtimeState, pendingTopologyDetails, details);
     }
 
@@ -698,7 +702,7 @@ public:
             return false;
         }
 
-        return MqttPublisher::sendJson(detailsDoc, MqttTopicsBuilder::mqttOutConfTopic.c_str(), true, 1);
+        return MqttPublisher::sendJson(detailsDoc, MqttTopicsBuilder::mqttOutConfTopic.c_str(), true, constants::mqtt::MQTT_QOS_CONF);
     }
 
     /**
@@ -768,6 +772,7 @@ public:
                 }
                 virtualDevice.clearDirtyActuators();
                 runtimeState.isAuthoritativeStateDirty = false;
+                mqttMirrorFreshThisSession = true;
             }
             return homiePublished;
         }
@@ -872,7 +877,8 @@ public:
         diagnosticDocument[kBridgeBreadcrumbPhaseMsKey] = previousBridgeLoopPhaseMs;
         diagnosticDocument[kBridgeBreadcrumbBootCountKey] = previousBridgeBootCount;
 
-        if (!MqttPublisher::sendJson(diagnosticDocument, MqttTopicsBuilder::mqttOutBridgeTopic.c_str(), true, 1))
+        if (!MqttPublisher::sendJson(diagnosticDocument, MqttTopicsBuilder::mqttOutBridgeTopic.c_str(), true,
+                                     constants::mqtt::MQTT_QOS_BRIDGE))
         {
             return false;
         }
@@ -923,6 +929,7 @@ public:
     {
         mqttClient = nullptr;
         mqttResyncPending = false;
+        mqttMirrorFreshThisSession = false;
         lastMqttResyncAttemptMs = 0U;
         clearPendingRuntimeState();
         mqttCommandQueue.clear();
@@ -1034,7 +1041,21 @@ public:
         // quick successive state frames collapse into one MQTT/Homie refresh wave.
         runtimeState.isAuthoritativeStateDirty = true;
         runtimeState.canServeCachedStateRequests = false;
+        mqttMirrorFreshThisSession = false;
         runtimeState.lastAuthoritativeStateUpdateMs = timeKeeper::getTime();
+    }
+
+    /**
+     * @brief Return whether a service-topic BOOT would only repeat the current MQTT mirror.
+     * @details The flag resets on MQTT disconnect, controller desync and fresh
+     *          authoritative state. That preserves full republish after
+     *          reconnect while suppressing repeated service BOOT requests in an
+     *          already-fresh MQTT session.
+     */
+    [[nodiscard]] auto canSuppressServiceBootResync() const -> bool
+    {
+        return mqttMirrorFreshThisSession && Homie.isConnected() && virtualDevice.isRuntimeSynchronized() &&
+               !runtimeState.isAuthoritativeStateDirty;
     }
 
     /**
@@ -1059,7 +1080,8 @@ public:
             return false;
         }
 
-        return MqttPublisher::sendRaw(MqttTopicsBuilder::mqttOutStateTopic.c_str(), true, 1, payloadWriter.data(), payloadWriter.size());
+        return MqttPublisher::sendRaw(MqttTopicsBuilder::mqttOutStateTopic.c_str(), true, constants::mqtt::MQTT_QOS_STATE,
+                                      payloadWriter.data(), payloadWriter.size());
     }
 
     /**
@@ -1129,6 +1151,14 @@ public:
             return;
         }
 
+        const bool fullStatePublishPending = virtualDevice.isFullStatePublishPending();
+        if (!fullStatePublishPending && !virtualDevice.hasDirtyActuators())
+        {
+            runtimeState.isAuthoritativeStateDirty = false;
+            runtimeState.canServeCachedStateRequests = true;
+            return;
+        }
+
         if (!Homie.isConnected())
         {
             return;
@@ -1145,7 +1175,6 @@ public:
             return;
         }
 
-        const bool fullStatePublishPending = virtualDevice.isFullStatePublishPending();
         bool homiePublished = false;
         if (fullStatePublishPending)
         {
@@ -1173,6 +1202,7 @@ public:
         virtualDevice.clearDirtyActuators();
         runtimeState.isAuthoritativeStateDirty = false;
         runtimeState.canServeCachedStateRequests = true;
+        mqttMirrorFreshThisSession = true;
     }
 
     /**
@@ -1238,7 +1268,14 @@ public:
         {
             controllerSerialLink.reconcileDesiredActuatorStatesFromAuthoritative();
             runtimeState.bootstrapPhase = BootstrapPhase::SYNCED;
-            markAuthoritativeStateDirty();
+            if (virtualDevice.isFullStatePublishPending() || virtualDevice.hasDirtyActuators())
+            {
+                markAuthoritativeStateDirty();
+            }
+            else if (!runtimeState.isAuthoritativeStateDirty)
+            {
+                runtimeState.canServeCachedStateRequests = true;
+            }
             return;
         }
 
@@ -1285,7 +1322,8 @@ public:
 
         case DeserializeExitCode::OK_NETWORK_CLICK_REQUEST:
         {
-            if (Homie.isConnected() && MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 2))
+            if (Homie.isConnected() && MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false,
+                                                               constants::mqtt::MQTT_QOS_EVENTS))
             {
                 break;
             }
@@ -1304,7 +1342,8 @@ public:
         case DeserializeExitCode::OK_OTHER_PAYLOAD:
             if (Homie.isConnected())
             {
-                if (!MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 2))
+                if (!MqttPublisher::sendJson(messageDocument, MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false,
+                                             constants::mqtt::MQTT_QOS_EVENTS))
                 {
                     DPL(code == DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM
                             ? "Dropping controller NETWORK_CLICK_CONFIRM because the MQTT client did not accept the publish."
@@ -1399,7 +1438,8 @@ public:
         bool isDeviceTopicSubscribed = false;
         if (hasDeviceScopedTopics())
         {
-            const std::uint16_t deviceTopicPacketId = mqttClient->subscribe(MqttTopicsBuilder::mqttInTopic.c_str(), 2);
+            const std::uint16_t deviceTopicPacketId =
+                mqttClient->subscribe(MqttTopicsBuilder::mqttInTopic.c_str(), constants::mqtt::MQTT_QOS_DEVICE_COMMANDS);
             if (deviceTopicPacketId == 0U)
             {
                 return false;
@@ -1408,7 +1448,7 @@ public:
             isDeviceTopicSubscribed = true;
         }
 
-        const std::uint16_t serviceTopicPacketId = mqttClient->subscribe(MQTT_TOPIC_SERVICE, 1);
+        const std::uint16_t serviceTopicPacketId = mqttClient->subscribe(MQTT_TOPIC_SERVICE, constants::mqtt::MQTT_QOS_SERVICE_COMMANDS);
         if (serviceTopicPacketId == 0U)
         {
             if (isDeviceTopicSubscribed)
@@ -1748,6 +1788,11 @@ public:
             // The service-topic BOOT only asks the bridge to refresh its MQTT-side
             // mirror. The main loop already owns the resync pacing logic, so keep
             // this path side-effect free and let the queued loop phase execute it.
+            if (canSuppressServiceBootResync())
+            {
+                DPL("Ignoring service-topic BOOT because this MQTT session already has a fresh retained mirror.");
+                return;
+            }
             scheduleMqttResyncNow();
             return;
 

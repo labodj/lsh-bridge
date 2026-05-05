@@ -352,6 +352,14 @@ auto VirtualDevice::isActuatorDirty(std::uint8_t index) const noexcept -> bool
 }
 
 /**
+ * @brief Returns whether any actuator still needs to be mirrored to MQTT/Homie.
+ */
+auto VirtualDevice::hasDirtyActuators() const noexcept -> bool
+{
+    return this->dirtyActuators.any();
+}
+
+/**
  * @brief Clears the accumulated dirty-actuator set after a successful Homie refresh window.
  */
 void VirtualDevice::clearDirtyActuators() noexcept

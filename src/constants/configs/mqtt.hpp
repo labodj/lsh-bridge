@@ -76,6 +76,48 @@ static constexpr const char *MQTT_TOPIC_SERVICE = "LSH/Node-RED/SRV";  //!< Defa
 #else
 static constexpr const char *MQTT_TOPIC_SERVICE = CONFIG_MQTT_TOPIC_SERVICE;  //!< Service topic
 #endif  // CONFIG_MQTT_TOPIC_SERVICE
+
+#ifndef CONFIG_MQTT_QOS_DEVICE_COMMANDS
+static constexpr const std::uint8_t MQTT_QOS_DEVICE_COMMANDS = 2U;  //!< QoS for device-scoped command subscriptions.
+#else
+static_assert(CONFIG_MQTT_QOS_DEVICE_COMMANDS <= 2U, "CONFIG_MQTT_QOS_DEVICE_COMMANDS must be 0, 1 or 2.");
+static constexpr const std::uint8_t MQTT_QOS_DEVICE_COMMANDS = CONFIG_MQTT_QOS_DEVICE_COMMANDS;
+#endif  // CONFIG_MQTT_QOS_DEVICE_COMMANDS
+
+#ifndef CONFIG_MQTT_QOS_SERVICE_COMMANDS
+static constexpr const std::uint8_t MQTT_QOS_SERVICE_COMMANDS = 1U;  //!< QoS for bridge service-topic subscriptions.
+#else
+static_assert(CONFIG_MQTT_QOS_SERVICE_COMMANDS <= 2U, "CONFIG_MQTT_QOS_SERVICE_COMMANDS must be 0, 1 or 2.");
+static constexpr const std::uint8_t MQTT_QOS_SERVICE_COMMANDS = CONFIG_MQTT_QOS_SERVICE_COMMANDS;
+#endif  // CONFIG_MQTT_QOS_SERVICE_COMMANDS
+
+#ifndef CONFIG_MQTT_QOS_CONF
+static constexpr const std::uint8_t MQTT_QOS_CONF = 1U;  //!< QoS for retained controller topology publishes.
+#else
+static_assert(CONFIG_MQTT_QOS_CONF <= 2U, "CONFIG_MQTT_QOS_CONF must be 0, 1 or 2.");
+static constexpr const std::uint8_t MQTT_QOS_CONF = CONFIG_MQTT_QOS_CONF;
+#endif  // CONFIG_MQTT_QOS_CONF
+
+#ifndef CONFIG_MQTT_QOS_STATE
+static constexpr const std::uint8_t MQTT_QOS_STATE = 1U;  //!< QoS for retained actuator state publishes.
+#else
+static_assert(CONFIG_MQTT_QOS_STATE <= 2U, "CONFIG_MQTT_QOS_STATE must be 0, 1 or 2.");
+static constexpr const std::uint8_t MQTT_QOS_STATE = CONFIG_MQTT_QOS_STATE;
+#endif  // CONFIG_MQTT_QOS_STATE
+
+#ifndef CONFIG_MQTT_QOS_EVENTS
+static constexpr const std::uint8_t MQTT_QOS_EVENTS = 2U;  //!< QoS for controller-backed runtime events.
+#else
+static_assert(CONFIG_MQTT_QOS_EVENTS <= 2U, "CONFIG_MQTT_QOS_EVENTS must be 0, 1 or 2.");
+static constexpr const std::uint8_t MQTT_QOS_EVENTS = CONFIG_MQTT_QOS_EVENTS;
+#endif  // CONFIG_MQTT_QOS_EVENTS
+
+#ifndef CONFIG_MQTT_QOS_BRIDGE
+static constexpr const std::uint8_t MQTT_QOS_BRIDGE = 1U;  //!< QoS for bridge-local diagnostics and replies.
+#else
+static_assert(CONFIG_MQTT_QOS_BRIDGE <= 2U, "CONFIG_MQTT_QOS_BRIDGE must be 0, 1 or 2.");
+static constexpr const std::uint8_t MQTT_QOS_BRIDGE = CONFIG_MQTT_QOS_BRIDGE;
+#endif  // CONFIG_MQTT_QOS_BRIDGE
 namespace detail
 {
 constexpr std::size_t MQTT_BASE_TOPIC_LENGTH_VALUE =

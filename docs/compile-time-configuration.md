@@ -66,6 +66,15 @@ public `CONFIG_*` settings.
 | `CONFIG_MQTT_TOPIC_BRIDGE`  | `"bridge"`           | Bridge-local diagnostics and service-level replies                      |
 | `CONFIG_MQTT_TOPIC_SERVICE` | `"LSH/Node-RED/SRV"` | Broadcast/service topic subscribed independently from device name       |
 
+| QoS Macro                          | Default | What it affects                             |
+| ---------------------------------- | ------- | ------------------------------------------- |
+| `CONFIG_MQTT_QOS_DEVICE_COMMANDS`  | `2U`    | Device-scoped command subscription QoS      |
+| `CONFIG_MQTT_QOS_SERVICE_COMMANDS` | `1U`    | Bridge service-topic subscription QoS       |
+| `CONFIG_MQTT_QOS_CONF`             | `1U`    | Retained topology/configuration publish QoS |
+| `CONFIG_MQTT_QOS_STATE`            | `1U`    | Retained actuator-state publish QoS         |
+| `CONFIG_MQTT_QOS_EVENTS`           | `2U`    | Controller-backed runtime event publish QoS |
+| `CONFIG_MQTT_QOS_BRIDGE`           | `1U`    | Bridge-local diagnostic/service-reply QoS   |
+
 Topic buffer sizes are derived from these strings plus `CONFIG_MAX_NAME_LENGTH`.
 `lsh-bridge` does not expose public `CONFIG_MQTT_*_LENGTH` settings.
 
@@ -236,6 +245,12 @@ build_flags =
     -D CONFIG_MQTT_TOPIC_EVENTS=\"events\"
     -D CONFIG_MQTT_TOPIC_BRIDGE=\"bridge\"
     -D CONFIG_MQTT_TOPIC_SERVICE=\"LSH/Node-RED/SRV\"
+    ; -D CONFIG_MQTT_QOS_DEVICE_COMMANDS=2U
+    ; -D CONFIG_MQTT_QOS_SERVICE_COMMANDS=1U
+    ; -D CONFIG_MQTT_QOS_CONF=1U
+    ; -D CONFIG_MQTT_QOS_STATE=1U
+    ; -D CONFIG_MQTT_QOS_EVENTS=2U
+    ; -D CONFIG_MQTT_QOS_BRIDGE=1U
     -D HOMIE_CONVENTION_VERSION=5
     -D CONFIG_HOMIE_FIRMWARE_NAME=\"lsh-homie\"
     -D CONFIG_HOMIE_FIRMWARE_VERSION=\"1.4.4\"

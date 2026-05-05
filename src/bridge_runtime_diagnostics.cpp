@@ -25,6 +25,7 @@
 #include <ArduinoJson.h>
 
 #include "communication/mqtt_publisher.hpp"
+#include "constants/configs/mqtt.hpp"
 
 namespace
 {
@@ -115,7 +116,7 @@ void publishPendingBridgeDiagnostics(ControllerSerialLink &controllerSerialLink,
         diagnosticDoc[PENDING_DURATION_MS_KEY] = actuatorStormDiagnostic.pendingDurationMs;
         diagnosticDoc[MUTATION_COUNT_KEY] = actuatorStormDiagnostic.mutationCount;
 
-        if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, 1))
+        if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, constants::mqtt::MQTT_QOS_BRIDGE))
         {
             controllerSerialLink.clearPendingActuatorStormDiagnostic();
         }
@@ -139,7 +140,7 @@ void publishPendingBridgeDiagnostics(ControllerSerialLink &controllerSerialLink,
             diagnosticDoc[DROPPED_SERVICE_COMMANDS_KEY] = droppedServiceCommands;
         }
 
-        if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, 1))
+        if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, constants::mqtt::MQTT_QOS_BRIDGE))
         {
             mqttCommandQueue.consumeDroppedCounters(droppedDeviceCommands, droppedServiceCommands);
         }
@@ -174,7 +175,7 @@ void publishPendingBridgeDiagnostics(ControllerSerialLink &controllerSerialLink,
             diagnosticDoc[REJECTED_MALFORMED_COMMANDS_KEY] = rejectedMalformedCommands;
         }
 
-        if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, 1))
+        if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, constants::mqtt::MQTT_QOS_BRIDGE))
         {
             mqttCommandQueue.consumeRejectedCounters(rejectedRetainedCommands, rejectedOversizeCommands, rejectedFragmentedCommands,
                                                      rejectedMalformedCommands);
@@ -207,7 +208,7 @@ void publishPendingBridgeDiagnostics(ControllerSerialLink &controllerSerialLink,
         diagnosticDoc[REJECTED_HOMIE_STAGE_FAILED_COMMANDS_KEY] = rejectedHomieStageFailedCommands;
     }
 
-    if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, 1))
+    if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, constants::mqtt::MQTT_QOS_BRIDGE))
     {
         controllerSerialLink.consumeRejectedHomieCounters(rejectedHomieDesyncCommands, rejectedHomieInvalidPayloadCommands,
                                                           rejectedHomieStageFailedCommands);
@@ -235,7 +236,7 @@ auto publishSimpleBridgeDiagnostic(bool homieConnected, bool hasBridgeTopic, con
     StaticJsonDocument<BRIDGE_DIAGNOSTIC_DOC_SIZE> diagnosticDoc;
     diagnosticDoc[BRIDGE_EVENT_KEY] = DIAGNOSTIC_EVENT;
     diagnosticDoc[BRIDGE_DIAGNOSTIC_KIND_KEY] = diagnosticKind;
-    return MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, 1);
+    return MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, constants::mqtt::MQTT_QOS_BRIDGE);
 }
 
 /**
@@ -271,7 +272,7 @@ auto publishServicePingReply(bool homieConnected,
     bridgeDoc[CONTROLLER_CONNECTED_KEY] = controllerConnected;
     bridgeDoc[RUNTIME_SYNCHRONIZED_KEY] = runtimeSynchronized;
     bridgeDoc[BOOTSTRAP_PHASE_KEY] = bootstrapPhaseName;
-    return MqttPublisher::sendJson(bridgeDoc, bridgeTopic, false, 1);
+    return MqttPublisher::sendJson(bridgeDoc, bridgeTopic, false, constants::mqtt::MQTT_QOS_BRIDGE);
 }
 
 }  // namespace lsh::bridge::runtime

@@ -189,6 +189,12 @@ a valid device-scoped `bridge` topic. Before the first validated topology is cac
 service command is accepted but there is no authoritative device identity to publish
 under.
 
+Service-topic `BOOT` refreshes the MQTT-side retained mirror from the current controller
+cache. Repeated `BOOT` requests in the same connected MQTT session are suppressed after
+a complete fresh mirror has already been published. The suppression is cleared on MQTT
+disconnect, controller desynchronization, topology migration and fresh controller-backed
+state, so reconnects and real state changes still trigger a full republish.
+
 The `controller_connected` field becomes `true` only after the bridge has decoded at
 least one valid controller frame in the current boot session and that frame is inside
 the configured liveness timeout.

@@ -152,6 +152,8 @@ public:
 
     auto isActuatorDirty(std::uint8_t index) const noexcept -> bool;
 
+    [[nodiscard]] auto hasDirtyActuators() const noexcept -> bool;
+
     [[nodiscard]] inline auto isActuatorDirtyUnchecked(std::uint8_t index) const noexcept -> bool
     {
         return this->dirtyActuators.test(index);

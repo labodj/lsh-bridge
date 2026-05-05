@@ -26,6 +26,7 @@
 #include "communication/checked_writer.hpp"
 #include "communication/mqtt_topics_builder.hpp"
 #include "constants/controller_serial.hpp"
+#include "constants/configs/mqtt.hpp"
 #include "debug/debug.hpp"
 #include "utils/payloads.hpp"
 
@@ -138,8 +139,8 @@ auto sendJson(constants::payloads::StaticType payloadType) -> bool
 
     // Static payloads are pre-serialized at compile time, so this path can
     // publish them directly without building a temporary JsonDocument.
-    return sendRaw(MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, 1, reinterpret_cast<const char *>(payloadToSend.data()),
-                   payloadToSend.size());
+    return sendRaw(MqttTopicsBuilder::mqttOutEventsTopic.c_str(), false, constants::mqtt::MQTT_QOS_EVENTS,
+                   reinterpret_cast<const char *>(payloadToSend.data()), payloadToSend.size());
 }
 
 }  // namespace MqttPublisher
