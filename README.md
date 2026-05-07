@@ -75,7 +75,7 @@ Install from the PlatformIO Registry:
 
 ```ini
 lib_deps =
-    labodj/lsh-bridge@^1.4.4
+    labodj/lsh-bridge@^1.5.0
 ```
 
 The embedding firmware owns board choice, serial pins, topic names, firmware identity
@@ -182,6 +182,27 @@ topic sizes, protocol codecs or Homie identity. The most common groups are:
 
 Use the bundled example as the starting point. The complete reference lives in
 [docs/compile-time-configuration.md](https://github.com/labodj/lsh-bridge/blob/main/docs/compile-time-configuration.md).
+
+For full-stack installations, prefer generating these flags from the controller contract
+with the `labo-smart-home` stack composer. The generated `platformio-bridge.ini` creates
+one wide bridge firmware environment per profile. Device names are upload targets, not
+firmware variants:
+
+```ini
+[platformio]
+extra_configs = generated/platformio-bridge.ini
+```
+
+```bash
+platformio run -e bridge_littlefs
+platformio run -e bridge_littlefs_usb_j1 -t upload
+```
+
+In the one-project workflow, `lsh-bridge` stays a normal PlatformIO dependency. The
+generated environments remove the need to copy capacity, topic and codec flags by hand,
+and persistent local extensions can live outside `generated/`. Firmware OTA for this
+bridge is MQTT/Homie-based: use the stack-generated `LSH OTA <device>` custom targets or
+the generated `deploy-plan.json` command for your MQTT OTA helper.
 
 ## Documentation
 
