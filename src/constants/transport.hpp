@@ -26,14 +26,14 @@
 
 namespace lsh::bridge
 {
-    namespace transport
-    {
-        inline constexpr uint8_t MSGPACK_FRAME_END = 0xC0U; //!< Delimiter byte that starts and ends each framed MsgPack payload.
-        inline constexpr uint8_t MSGPACK_FRAME_ESCAPE = 0xDBU; //!< Escape marker emitted before reserved payload bytes.
-        inline constexpr uint8_t MSGPACK_FRAME_ESCAPED_END = 0xDCU; //!< Escaped representation of MSGPACK_FRAME_END.
-        inline constexpr uint8_t MSGPACK_FRAME_ESCAPED_ESCAPE = 0xDDU; //!< Escaped representation of MSGPACK_FRAME_ESCAPE.
+namespace transport
+{
+inline constexpr uint8_t MSGPACK_FRAME_END = 0xC0U;             //!< Delimiter byte that starts and ends each framed MsgPack payload.
+inline constexpr uint8_t MSGPACK_FRAME_ESCAPE = 0xDBU;          //!< Escape marker emitted before reserved payload bytes.
+inline constexpr uint8_t MSGPACK_FRAME_ESCAPED_END = 0xDCU;     //!< Escaped representation of MSGPACK_FRAME_END.
+inline constexpr uint8_t MSGPACK_FRAME_ESCAPED_ESCAPE = 0xDDU;  //!< Escaped representation of MSGPACK_FRAME_ESCAPE.
 
-    } // namespace transport
-} // namespace lsh::bridge
+}  // namespace transport
+}  // namespace lsh::bridge
 
-#endif // LSH_BRIDGE_CONSTANTS_TRANSPORT_HPP
+#endif  // LSH_BRIDGE_CONSTANTS_TRANSPORT_HPP
