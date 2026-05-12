@@ -70,12 +70,10 @@ jobs:
             --target shared-doc \
             --target core \
             --target bridge \
-            --target node-red \
             --target coordinator \
             --shared-doc-root "${RUNNER_TEMP}/shared-doc" \
             --core-root "${RUNNER_TEMP}/lsh-core" \
             --bridge-root "${RUNNER_TEMP}/lsh-bridge" \
-            --node-red-root "${RUNNER_TEMP}/node-red-contrib-lsh-logic" \
             --coordinator-root "${RUNNER_TEMP}/labo-smart-home-coordinator"
 
   cross-repo-protocol-drift:

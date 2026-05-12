@@ -166,6 +166,12 @@ git fetch lsh-protocol
 git subtree pull --prefix=vendor/lsh-protocol lsh-protocol <tag> --squash
 ```
 
+If the consumer repository already has regenerated protocol outputs or other
+local protocol-related edits, stash those files before the subtree pull and
+restore them afterwards. The subtree operation must update only
+`vendor/lsh-protocol`; consumer-generated files should be regenerated or
+restored as a separate step.
+
 Use `main` only when you are intentionally coordinating unreleased protocol work
 across multiple LSH repositories:
 
@@ -219,11 +225,9 @@ python3 tools/generate_lsh_protocol.py \
   --target core \
   --target bridge \
   --target coordinator \
-  --target node-red \
   --core-root /path/to/lsh-core \
   --bridge-root /path/to/lsh-bridge \
-  --coordinator-root /path/to/labo-smart-home-coordinator \
-  --node-red-root /path/to/node-red-contrib-lsh-logic
+  --coordinator-root /path/to/labo-smart-home-coordinator
 ```
 
 Target meanings:
@@ -233,12 +237,9 @@ Target meanings:
 - `bridge` writes C++ headers for `lsh-bridge`.
 - `coordinator` writes TypeScript protocol constants for the standalone
   coordinator package.
-- `node-red` writes TypeScript protocol constants for packages that consume this
-  protocol directly from a Node-RED repository.
 
-The `node-red` target is retained for direct Node-RED package consumption. For
-new LSH automation work, the preferred direction is to keep protocol logic inside
-`labo-smart-home-coordinator` and let Node-RED wrap that library.
+Node-RED integration intentionally consumes `labo-smart-home-coordinator`
+instead of generating its own protocol copy.
 
 ## Maintainer Flow
 
@@ -250,8 +251,10 @@ When the wire contract changes:
 4. Run `python3 tools/generate_lsh_protocol.py --check`.
 5. Confirm the manifest changed only because the spec, golden examples, shared
    artifacts, or expected consumer artifacts changed.
-6. Propagate the vendored protocol copy into consumer repositories.
-7. Run each consumer's protocol update/check command.
+6. Propagate the vendored protocol copy into consumer repositories with
+   `git subtree`, stashing local generated protocol outputs first when needed.
+7. Restore or regenerate each consumer's protocol outputs, then run its
+   protocol update/check command.
 8. Commit the spec, generated docs, schema, manifest, and consumer-generated
    outputs together in the appropriate repositories.
 

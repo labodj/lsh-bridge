@@ -30,13 +30,11 @@ TARGET_CORE = "core"
 TARGET_BRIDGE = "bridge"
 VALID_TARGETS = {TARGET_CORE, TARGET_BRIDGE}
 CLI_TARGET_SHARED_DOC = "shared-doc"
-CLI_TARGET_NODE_RED = "node-red"
 CLI_TARGET_COORDINATOR = "coordinator"
 VALID_CLI_TARGETS = (
     CLI_TARGET_SHARED_DOC,
     TARGET_CORE,
     TARGET_BRIDGE,
-    CLI_TARGET_NODE_RED,
     CLI_TARGET_COORDINATOR,
 )
 CPP_IDENTIFIER_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -733,6 +731,51 @@ namespace {cpp_namespace}
 """
 
 
+def render_cpp_transport(header_guard: str, cpp_namespace: str, *, file_name: str) -> str:
+    """Render the shared serial transport constants used by C++ targets."""
+
+    return f"""/**
+ * @file    {file_name}
+ * @author  Jacopo Labardi (labodj)
+ * @brief Defines the serial MsgPack frame transport byte contract.
+ * @note Do not edit manually. Run tools/generate_lsh_protocol.py instead.
+ *
+ * Copyright 2026 Jacopo Labardi
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef {header_guard}
+#define {header_guard}
+
+#include <stdint.h>
+
+namespace {cpp_namespace}
+{{
+    namespace transport
+    {{
+        inline constexpr uint8_t MSGPACK_FRAME_END = 0x{MSGPACK_FRAME_END:02X}U; //!< Delimiter byte that starts and ends each framed MsgPack payload.
+        inline constexpr uint8_t MSGPACK_FRAME_ESCAPE = 0x{MSGPACK_FRAME_ESCAPE:02X}U; //!< Escape marker emitted before reserved payload bytes.
+        inline constexpr uint8_t MSGPACK_FRAME_ESCAPED_END = 0x{MSGPACK_FRAME_ESCAPED_END:02X}U; //!< Escaped representation of MSGPACK_FRAME_END.
+        inline constexpr uint8_t MSGPACK_FRAME_ESCAPED_ESCAPE = 0x{MSGPACK_FRAME_ESCAPED_ESCAPE:02X}U; //!< Escaped representation of MSGPACK_FRAME_ESCAPE.
+
+    }} // namespace transport
+}} // namespace {cpp_namespace}
+
+#endif // {header_guard}
+"""
+
+
 def render_cpp_static_payloads(
     spec: ProtocolSpec,
     *,
@@ -1008,6 +1051,16 @@ def consumer_artifact_outputs(spec: ProtocolSpec) -> list[dict[str, str]]:
         {
             "consumer": "lsh-core",
             "target": TARGET_CORE,
+            "path": "lsh-core/src/communication/constants/transport.hpp",
+            "content": render_cpp_transport(
+                "LSH_CORE_COMMUNICATION_CONSTANTS_TRANSPORT_HPP",
+                "lsh::core",
+                file_name="transport.hpp",
+            ),
+        },
+        {
+            "consumer": "lsh-core",
+            "target": TARGET_CORE,
             "path": "lsh-core/src/communication/constants/static_payloads.hpp",
             "content": render_cpp_static_payloads(
                 spec,
@@ -1027,6 +1080,16 @@ def consumer_artifact_outputs(spec: ProtocolSpec) -> list[dict[str, str]]:
                 "LSH_BRIDGE_CONSTANTS_COMMUNICATION_PROTOCOL_HPP",
                 "lsh::bridge",
                 file_name="communication_protocol.hpp",
+            ),
+        },
+        {
+            "consumer": "lsh-bridge",
+            "target": TARGET_BRIDGE,
+            "path": "lsh-bridge/src/constants/transport.hpp",
+            "content": render_cpp_transport(
+                "LSH_BRIDGE_CONSTANTS_TRANSPORT_HPP",
+                "lsh::bridge",
+                file_name="transport.hpp",
             ),
         },
         {
@@ -1091,6 +1154,16 @@ def render_protocol_manifest(
         "consumerArtifacts": consumer_artifact_outputs(spec),
     }
     return json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+
+
+def path_is_relative_to(path: Path, root: Path) -> bool:
+    """Return true when a path lives under root."""
+
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def render_protocol_markdown(spec: ProtocolSpec, golden_payloads: GoldenPayloads) -> str:
@@ -1297,7 +1370,6 @@ def generated_outputs(
     shared_doc_root: Path | None,
     core_root: Path | None,
     bridge_root: Path | None,
-    node_red_root: Path | None,
     coordinator_root: Path | None,
 ) -> list[tuple[Path, str]]:
     """Return the generated files requested by the selected targets."""
@@ -1338,6 +1410,14 @@ def generated_outputs(
                         ),
                     ),
                     (
+                        core_root / "src" / "communication" / "constants" / "transport.hpp",
+                        render_cpp_transport(
+                            "LSH_CORE_COMMUNICATION_CONSTANTS_TRANSPORT_HPP",
+                            "lsh::core",
+                            file_name="transport.hpp",
+                        ),
+                    ),
+                    (
                         core_root / "src" / "communication" / "constants" / "static_payloads.hpp",
                         render_cpp_static_payloads(
                             spec,
@@ -1367,6 +1447,14 @@ def generated_outputs(
                         ),
                     ),
                     (
+                        bridge_root / "src" / "constants" / "transport.hpp",
+                        render_cpp_transport(
+                            "LSH_BRIDGE_CONSTANTS_TRANSPORT_HPP",
+                            "lsh::bridge",
+                            file_name="transport.hpp",
+                        ),
+                    ),
+                    (
                         bridge_root / "src" / "constants" / "payloads.hpp",
                         render_cpp_static_payloads(
                             spec,
@@ -1381,35 +1469,31 @@ def generated_outputs(
             )
             continue
 
-        if target == CLI_TARGET_NODE_RED:
-            if node_red_root is None:
-                raise SpecError("--node-red-root is required when target 'node-red' is selected.")
-            outputs.append(
-                (
-                    node_red_root / "src" / "generated" / "protocol.ts",
-                    render_ts_protocol(spec),
-                )
-            )
-            continue
-
         if target == CLI_TARGET_COORDINATOR:
             if coordinator_root is None:
                 raise SpecError("--coordinator-root is required when target 'coordinator' is selected.")
-            outputs.append(
-                (
-                    coordinator_root / "src" / "generated" / "protocol.ts",
-                    render_ts_protocol(spec),
-                )
+            outputs.extend(
+                [
+                    (
+                        coordinator_root / "src" / "generated" / "protocol.ts",
+                        render_ts_protocol(spec),
+                    ),
+                ]
             )
             continue
 
         raise SpecError(f"Unknown target '{target}'. Valid targets: {', '.join(VALID_CLI_TARGETS)}.")
 
     if shared_manifest_root is not None:
+        shared_outputs = [
+            (path, content)
+            for path, content in outputs
+            if path_is_relative_to(path, shared_manifest_root)
+        ]
         outputs.append(
             (
                 shared_manifest_root / "shared" / "lsh_protocol_manifest.json",
-                render_protocol_manifest(spec, outputs),
+                render_protocol_manifest(spec, shared_outputs),
             )
         )
 
@@ -1437,7 +1521,6 @@ def run(
     shared_doc_root: Path | None,
     core_root: Path | None,
     bridge_root: Path | None,
-    node_red_root: Path | None,
     coordinator_root: Path | None,
 ) -> int:
     """Generate the files or verify that generated files are already up to date."""
@@ -1455,7 +1538,6 @@ def run(
         shared_doc_root=shared_doc_root,
         core_root=core_root,
         bridge_root=bridge_root,
-        node_red_root=node_red_root,
         coordinator_root=coordinator_root,
     ):
         if check_only:
@@ -1514,11 +1596,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="root directory of the lsh-bridge repository",
     )
     parser.add_argument(
-        "--node-red-root",
-        type=Path,
-        help="root directory of the node-red-contrib-lsh-logic repository",
-    )
-    parser.add_argument(
         "--coordinator-root",
         type=Path,
         help="root directory of the labo-smart-home-coordinator repository",
@@ -1538,7 +1615,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             shared_doc_root=args.shared_doc_root.resolve() if args.shared_doc_root else None,
             core_root=args.core_root.resolve() if args.core_root else None,
             bridge_root=args.bridge_root.resolve() if args.bridge_root else None,
-            node_red_root=args.node_red_root.resolve() if args.node_red_root else None,
             coordinator_root=args.coordinator_root.resolve() if args.coordinator_root else None,
         )
     except SpecError as exc:
