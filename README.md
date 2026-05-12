@@ -222,7 +222,7 @@ Validated baseline:
 - ESP32
 - Arduino framework
 - `pioarduino/platform-espressif32`
-- Homie convention v5
+- Homie convention v5 through `labodj/homie-v5`
 
 Recommended PlatformIO platform:
 
