@@ -40,6 +40,7 @@ void MsgPackFrameReceiver::reset() noexcept
 {
     this->frameLengthBytes = 0U;
     this->lastByteTimeMs = 0U;
+    this->frameStarted = false;
     this->escapePending = false;
     this->discardUntilFrameEnd = false;
 }
@@ -60,7 +61,7 @@ void MsgPackFrameReceiver::resetIfIdle(std::uint32_t nowMs, std::uint32_t idleTi
         return;
     }
 
-    if (!this->discardUntilFrameEnd && !this->escapePending && this->frameLengthBytes == 0U)
+    if (!this->frameStarted && !this->discardUntilFrameEnd && !this->escapePending && this->frameLengthBytes == 0U)
     {
         return;
     }
@@ -98,6 +99,7 @@ auto MsgPackFrameReceiver::appendByte(std::uint8_t byte) -> bool
 void MsgPackFrameReceiver::startDiscarding() noexcept
 {
     this->frameLengthBytes = 0U;
+    this->frameStarted = true;
     this->escapePending = false;
     this->discardUntilFrameEnd = true;
 }
@@ -124,6 +126,18 @@ auto MsgPackFrameReceiver::consumeByte(std::uint8_t byte, std::uint32_t nowMs) -
         {
             this->reset();
             return MsgPackFrameConsumeResult::FrameDiscarded;
+        }
+        return MsgPackFrameConsumeResult::Incomplete;
+    }
+
+    if (!this->frameStarted)
+    {
+        if (byte == MSGPACK_FRAME_END)
+        {
+            this->frameStarted = true;
+            this->frameLengthBytes = 0U;
+            this->escapePending = false;
+            this->discardUntilFrameEnd = false;
         }
         return MsgPackFrameConsumeResult::Incomplete;
     }

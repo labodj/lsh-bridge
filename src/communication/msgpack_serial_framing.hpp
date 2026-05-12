@@ -26,13 +26,10 @@
 
 #include <Arduino.h>
 
+#include "constants/transport.hpp"
+
 namespace lsh::bridge::transport
 {
-constexpr std::uint8_t MSGPACK_FRAME_END = 0xC0U;             //!< Delimiter that separates adjacent framed MsgPack payloads.
-constexpr std::uint8_t MSGPACK_FRAME_ESCAPE = 0xDBU;          //!< Escape marker emitted before reserved bytes inside the frame body.
-constexpr std::uint8_t MSGPACK_FRAME_ESCAPED_END = 0xDCU;     //!< Escaped representation of `MSGPACK_FRAME_END`.
-constexpr std::uint8_t MSGPACK_FRAME_ESCAPED_ESCAPE = 0xDDU;  //!< Escaped representation of `MSGPACK_FRAME_ESCAPE`.
-
 /**
  * @brief Result of feeding one serial byte into the MsgPack frame receiver.
  */
@@ -53,6 +50,7 @@ private:
     const std::uint16_t frameCapacity;    //!< Maximum number of payload bytes accepted before the frame is discarded.
     std::uint16_t frameLengthBytes = 0U;  //!< Number of payload bytes currently stored in `frameBuffer`.
     std::uint32_t lastByteTimeMs = 0U;    //!< Real-time timestamp of the most recent byte that touched this receiver.
+    bool frameStarted = false;            //!< True after the opening END until reset or completion.
     bool escapePending = false;           //!< True after an escape marker until the following escaped byte arrives.
     bool discardUntilFrameEnd = false;    //!< True while draining a corrupted frame until the next delimiter.
 
