@@ -47,6 +47,10 @@ constexpr char REJECTED_FRAGMENTED_COMMANDS_KEY[] =
     "rejected_fragmented_commands";  //!< JSON key that reports fragmented commands rejected before enqueue.
 constexpr char REJECTED_MALFORMED_COMMANDS_KEY[] =
     "rejected_malformed_commands";  //!< JSON key that reports malformed commands rejected during parse.
+constexpr char REJECTED_CONTROLLER_EVENT_COMMANDS_KEY[] =
+    "rejected_controller_event_commands";  //!< JSON key that reports controller-originated event commands rejected from MQTT.
+constexpr char REJECTED_UNSUPPORTED_FORWARD_COMMANDS_KEY[] =
+    "rejected_unsupported_forward_commands";  //!< JSON key that reports unsupported commands not forwarded to the controller.
 constexpr char REJECTED_HOMIE_DESYNC_COMMANDS_KEY[] =
     "rejected_homie_desync_commands";  //!< JSON key that reports Homie writes rejected while runtime state was stale.
 constexpr char REJECTED_HOMIE_INVALID_PAYLOAD_COMMANDS_KEY[] =
@@ -150,10 +154,14 @@ void publishPendingBridgeDiagnostics(ControllerSerialLink &controllerSerialLink,
     std::uint16_t rejectedOversizeCommands = 0U;
     std::uint16_t rejectedFragmentedCommands = 0U;
     std::uint16_t rejectedMalformedCommands = 0U;
+    std::uint16_t rejectedControllerEventCommands = 0U;
+    std::uint16_t rejectedUnsupportedForwardCommands = 0U;
     mqttCommandQueue.snapshotRejectedCounters(rejectedRetainedCommands, rejectedOversizeCommands, rejectedFragmentedCommands,
-                                              rejectedMalformedCommands);
+                                              rejectedMalformedCommands, rejectedControllerEventCommands,
+                                              rejectedUnsupportedForwardCommands);
 
-    if (rejectedRetainedCommands > 0U || rejectedOversizeCommands > 0U || rejectedFragmentedCommands > 0U || rejectedMalformedCommands > 0U)
+    if (rejectedRetainedCommands > 0U || rejectedOversizeCommands > 0U || rejectedFragmentedCommands > 0U ||
+        rejectedMalformedCommands > 0U || rejectedControllerEventCommands > 0U || rejectedUnsupportedForwardCommands > 0U)
     {
         diagnosticDoc.clear();
         diagnosticDoc[BRIDGE_EVENT_KEY] = DIAGNOSTIC_EVENT;
@@ -174,11 +182,20 @@ void publishPendingBridgeDiagnostics(ControllerSerialLink &controllerSerialLink,
         {
             diagnosticDoc[REJECTED_MALFORMED_COMMANDS_KEY] = rejectedMalformedCommands;
         }
+        if (rejectedControllerEventCommands > 0U)
+        {
+            diagnosticDoc[REJECTED_CONTROLLER_EVENT_COMMANDS_KEY] = rejectedControllerEventCommands;
+        }
+        if (rejectedUnsupportedForwardCommands > 0U)
+        {
+            diagnosticDoc[REJECTED_UNSUPPORTED_FORWARD_COMMANDS_KEY] = rejectedUnsupportedForwardCommands;
+        }
 
         if (MqttPublisher::sendJson(diagnosticDoc, bridgeTopic, false, constants::mqtt::MQTT_QOS_BRIDGE))
         {
             mqttCommandQueue.consumeRejectedCounters(rejectedRetainedCommands, rejectedOversizeCommands, rejectedFragmentedCommands,
-                                                     rejectedMalformedCommands);
+                                                     rejectedMalformedCommands, rejectedControllerEventCommands,
+                                                     rejectedUnsupportedForwardCommands);
         }
     }
 

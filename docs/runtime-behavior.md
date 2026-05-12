@@ -281,7 +281,9 @@ Logical payload shape:
   "rejected_retained_commands": 3,
   "rejected_oversize_commands": 1,
   "rejected_fragmented_commands": 2,
-  "rejected_malformed_commands": 4
+  "rejected_malformed_commands": 4,
+  "rejected_controller_event_commands": 1,
+  "rejected_unsupported_forward_commands": 1
 }
 ```
 
@@ -296,6 +298,10 @@ Fields:
 - `rejected_malformed_commands`: MQTT commands whose delivery shape was acceptable but
   whose payload was not valid JSON/MessagePack for the active codec or did not contain a
   valid `p` command id
+- `rejected_controller_event_commands`: controller-originated event commands rejected
+  from MQTT command topics
+- `rejected_unsupported_forward_commands`: unsupported MQTT commands dropped because
+  they could not be forwarded safely to the controller
 
 Notes:
 

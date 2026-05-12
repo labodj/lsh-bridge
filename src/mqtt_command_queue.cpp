@@ -302,6 +302,20 @@ void MqttCommandQueue::recordRejectedCommand(MqttRejectedCommandReason reason)
             ++this->rejectedMalformedCommandCount;
         }
         break;
+
+    case MqttRejectedCommandReason::ControllerEvent:
+        if (this->rejectedControllerEventCommandCount < DIAGNOSTIC_COUNTER_MAX)
+        {
+            ++this->rejectedControllerEventCommandCount;
+        }
+        break;
+
+    case MqttRejectedCommandReason::UnsupportedForwardFailed:
+        if (this->rejectedUnsupportedForwardCommandCount < DIAGNOSTIC_COUNTER_MAX)
+        {
+            ++this->rejectedUnsupportedForwardCommandCount;
+        }
+        break;
     }
     portEXIT_CRITICAL(&this->queueMux);
 }
@@ -327,6 +341,8 @@ void MqttCommandQueue::clearRejectedCounters()
     this->rejectedOversizeCommandCount = 0U;
     this->rejectedFragmentedCommandCount = 0U;
     this->rejectedMalformedCommandCount = 0U;
+    this->rejectedControllerEventCommandCount = 0U;
+    this->rejectedUnsupportedForwardCommandCount = 0U;
     portEXIT_CRITICAL(&this->queueMux);
 }
 
@@ -351,17 +367,23 @@ void MqttCommandQueue::snapshotDroppedCounters(std::uint16_t &outDroppedDeviceCo
  * @param outRejectedOversizeCommands Receives the number of oversize commands rejected before enqueue.
  * @param outRejectedFragmentedCommands Receives the number of fragmented commands rejected before enqueue.
  * @param outRejectedMalformedCommands Receives the number of malformed commands rejected during main-loop parse.
+ * @param outRejectedControllerEventCommands Receives the number of controller-originated event commands rejected from MQTT.
+ * @param outRejectedUnsupportedForwardCommands Receives the number of unsupported commands that could not be forwarded.
  */
 void MqttCommandQueue::snapshotRejectedCounters(std::uint16_t &outRejectedRetainedCommands,
                                                 std::uint16_t &outRejectedOversizeCommands,
                                                 std::uint16_t &outRejectedFragmentedCommands,
-                                                std::uint16_t &outRejectedMalformedCommands)
+                                                std::uint16_t &outRejectedMalformedCommands,
+                                                std::uint16_t &outRejectedControllerEventCommands,
+                                                std::uint16_t &outRejectedUnsupportedForwardCommands)
 {
     portENTER_CRITICAL(&this->queueMux);
     outRejectedRetainedCommands = this->rejectedRetainedCommandCount;
     outRejectedOversizeCommands = this->rejectedOversizeCommandCount;
     outRejectedFragmentedCommands = this->rejectedFragmentedCommandCount;
     outRejectedMalformedCommands = this->rejectedMalformedCommandCount;
+    outRejectedControllerEventCommands = this->rejectedControllerEventCommandCount;
+    outRejectedUnsupportedForwardCommands = this->rejectedUnsupportedForwardCommandCount;
     portEXIT_CRITICAL(&this->queueMux);
 }
 
@@ -393,11 +415,15 @@ void MqttCommandQueue::consumeDroppedCounters(std::uint16_t droppedDeviceCommand
  * @param rejectedOversizeCommands Number of published oversize-command rejections to subtract.
  * @param rejectedFragmentedCommands Number of published fragmented-command rejections to subtract.
  * @param rejectedMalformedCommands Number of published malformed-command rejections to subtract.
+ * @param rejectedControllerEventCommands Number of published controller-event rejections to subtract.
+ * @param rejectedUnsupportedForwardCommands Number of published unsupported-forward rejections to subtract.
  */
 void MqttCommandQueue::consumeRejectedCounters(std::uint16_t rejectedRetainedCommands,
                                                std::uint16_t rejectedOversizeCommands,
                                                std::uint16_t rejectedFragmentedCommands,
-                                               std::uint16_t rejectedMalformedCommands)
+                                               std::uint16_t rejectedMalformedCommands,
+                                               std::uint16_t rejectedControllerEventCommands,
+                                               std::uint16_t rejectedUnsupportedForwardCommands)
 {
     portENTER_CRITICAL(&this->queueMux);
     this->rejectedRetainedCommandCount = (this->rejectedRetainedCommandCount > rejectedRetainedCommands)
@@ -413,6 +439,14 @@ void MqttCommandQueue::consumeRejectedCounters(std::uint16_t rejectedRetainedCom
     this->rejectedMalformedCommandCount = (this->rejectedMalformedCommandCount > rejectedMalformedCommands)
                                               ? static_cast<std::uint16_t>(this->rejectedMalformedCommandCount - rejectedMalformedCommands)
                                               : 0U;
+    this->rejectedControllerEventCommandCount =
+        (this->rejectedControllerEventCommandCount > rejectedControllerEventCommands)
+            ? static_cast<std::uint16_t>(this->rejectedControllerEventCommandCount - rejectedControllerEventCommands)
+            : 0U;
+    this->rejectedUnsupportedForwardCommandCount =
+        (this->rejectedUnsupportedForwardCommandCount > rejectedUnsupportedForwardCommands)
+            ? static_cast<std::uint16_t>(this->rejectedUnsupportedForwardCommandCount - rejectedUnsupportedForwardCommands)
+            : 0U;
     portEXIT_CRITICAL(&this->queueMux);
 }
 

@@ -46,10 +46,12 @@ enum class MqttCommandSource : std::uint8_t
  */
 enum class MqttRejectedCommandReason : std::uint8_t
 {
-    Retained,    //!< The broker replayed a retained command that the bridge must ignore.
-    Oversize,    //!< The payload exceeded the fixed inbound MQTT command buffer.
-    Fragmented,  //!< AsyncMqttClient delivered the command as fragments, which the bridge rejects by design.
-    Malformed    //!< The payload reached the main loop but was not a valid bridge command document.
+    Retained,                 //!< The broker replayed a retained command that the bridge must ignore.
+    Oversize,                 //!< The payload exceeded the fixed inbound MQTT command buffer.
+    Fragmented,               //!< AsyncMqttClient delivered the command as fragments, which the bridge rejects by design.
+    Malformed,                //!< The payload reached the main loop but was not a valid bridge command document.
+    ControllerEvent,          //!< A controller-originated event command arrived on the MQTT command topic.
+    UnsupportedForwardFailed  //!< An unsupported command could not be forwarded safely to the controller.
 };
 
 /**
@@ -95,17 +97,19 @@ private:
     static constexpr std::uint16_t DIAGNOSTIC_COUNTER_MAX = 0xFFFFU;  //!< Saturation limit for queued-drop diagnostics.
 
     QueuedMqttCommand queue[constants::runtime::MQTT_COMMAND_QUEUE_CAPACITY]{};  //!< Fixed storage for queued MQTT commands.
-    portMUX_TYPE queueMux = portMUX_INITIALIZER_UNLOCKED;  //!< Protects queue indices and drop counters across callback/main-loop access.
-    std::uint8_t tail = 0U;                                //!< Ring-buffer index of the next free enqueue slot.
-    std::uint8_t count = 0U;                               //!< Number of non-free slots, including in-flight Writing/Reading slots.
-    std::uint16_t queueGeneration = 1U;                    //!< Incremented by clear() so stale unlocked copies cannot commit.
-    std::uint16_t nextSequence = 1U;                       //!< Monotonic slot reservation sequence; wrap-safe while capacity stays small.
-    std::uint16_t droppedDeviceCommandCount = 0U;          //!< Aggregated number of dropped device-topic commands.
-    std::uint16_t droppedServiceCommandCount = 0U;         //!< Aggregated number of dropped service-topic commands.
-    std::uint16_t rejectedRetainedCommandCount = 0U;       //!< Aggregated number of retained commands rejected before enqueue.
-    std::uint16_t rejectedOversizeCommandCount = 0U;       //!< Aggregated number of oversize commands rejected before enqueue.
-    std::uint16_t rejectedFragmentedCommandCount = 0U;     //!< Aggregated number of fragmented commands rejected before enqueue.
-    std::uint16_t rejectedMalformedCommandCount = 0U;      //!< Aggregated number of malformed commands rejected during main-loop parse.
+    portMUX_TYPE queueMux = portMUX_INITIALIZER_UNLOCKED;    //!< Protects queue indices and drop counters across callback/main-loop access.
+    std::uint8_t tail = 0U;                                  //!< Ring-buffer index of the next free enqueue slot.
+    std::uint8_t count = 0U;                                 //!< Number of non-free slots, including in-flight Writing/Reading slots.
+    std::uint16_t queueGeneration = 1U;                      //!< Incremented by clear() so stale unlocked copies cannot commit.
+    std::uint16_t nextSequence = 1U;                         //!< Monotonic slot reservation sequence; wrap-safe while capacity stays small.
+    std::uint16_t droppedDeviceCommandCount = 0U;            //!< Aggregated number of dropped device-topic commands.
+    std::uint16_t droppedServiceCommandCount = 0U;           //!< Aggregated number of dropped service-topic commands.
+    std::uint16_t rejectedRetainedCommandCount = 0U;         //!< Aggregated number of retained commands rejected before enqueue.
+    std::uint16_t rejectedOversizeCommandCount = 0U;         //!< Aggregated number of oversize commands rejected before enqueue.
+    std::uint16_t rejectedFragmentedCommandCount = 0U;       //!< Aggregated number of fragmented commands rejected before enqueue.
+    std::uint16_t rejectedMalformedCommandCount = 0U;        //!< Aggregated number of malformed commands rejected during main-loop parse.
+    std::uint16_t rejectedControllerEventCommandCount = 0U;  //!< Aggregated number of controller events rejected from MQTT.
+    std::uint16_t rejectedUnsupportedForwardCommandCount = 0U;  //!< Aggregated number of unsupported forward drops.
 
 public:
     [[nodiscard]] auto enqueue(MqttCommandSource source, const char *payload, std::size_t payloadLength) -> bool;
@@ -119,12 +123,16 @@ public:
     void snapshotRejectedCounters(std::uint16_t &outRejectedRetainedCommands,
                                   std::uint16_t &outRejectedOversizeCommands,
                                   std::uint16_t &outRejectedFragmentedCommands,
-                                  std::uint16_t &outRejectedMalformedCommands);
+                                  std::uint16_t &outRejectedMalformedCommands,
+                                  std::uint16_t &outRejectedControllerEventCommands,
+                                  std::uint16_t &outRejectedUnsupportedForwardCommands);
     void consumeDroppedCounters(std::uint16_t droppedDeviceCommands, std::uint16_t droppedServiceCommands);
     void consumeRejectedCounters(std::uint16_t rejectedRetainedCommands,
                                  std::uint16_t rejectedOversizeCommands,
                                  std::uint16_t rejectedFragmentedCommands,
-                                 std::uint16_t rejectedMalformedCommands);
+                                 std::uint16_t rejectedMalformedCommands,
+                                 std::uint16_t rejectedControllerEventCommands,
+                                 std::uint16_t rejectedUnsupportedForwardCommands);
 };
 
 }  // namespace lsh::bridge

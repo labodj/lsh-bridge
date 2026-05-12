@@ -1695,6 +1695,7 @@ public:
         case Command::NETWORK_CLICK_CONFIRM:
             // These are controller-originated events. Accepting them from MQTT
             // would turn an upstream event channel into a confusing command loop.
+            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::ControllerEvent);
             DPL("Dropping MQTT command because the command id belongs to a controller-originated event.");
             return;
 
@@ -1764,6 +1765,7 @@ public:
 
         if (!forwardUnsupportedCommandToController(payload, payloadLength))
         {
+            mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::UnsupportedForwardFailed);
             DPL("Dropping unsupported MQTT command because the bridge cannot "
                 "safely translate an unknown payload across different MQTT "
                 "and serial codecs.");
