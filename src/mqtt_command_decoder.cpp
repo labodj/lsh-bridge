@@ -34,6 +34,11 @@ struct DecodedFields
     bool hasCorrelationId = false;
 };
 
+[[nodiscard]] auto hasStateField(const DecodedFields &fields) noexcept -> bool
+{
+    return fields.hasState || fields.hasPackedState;
+}
+
 #ifndef CONFIG_MSG_PACK_MQTT
 class JsonCursor
 {
@@ -231,6 +236,10 @@ private:
         {
         case KEY_PAYLOAD[0]:
         {
+            if (fields.hasCommand)
+            {
+                return false;
+            }
             std::uint8_t rawCommand = 0U;
             if (!cursor.readUint8(rawCommand))
             {
@@ -242,6 +251,10 @@ private:
         }
 
         case KEY_ID[0]:
+            if (fields.hasId)
+            {
+                return false;
+            }
             if (!cursor.readUint8(command.actuatorId))
             {
                 return false;
@@ -251,6 +264,10 @@ private:
             break;
 
         case KEY_STATE[0]:
+            if (hasStateField(fields))
+            {
+                return false;
+            }
             if (cursor.peek('['))
             {
                 if (!cursor.readPackedState(command.packedStateBytes, command.packedStateLength))
@@ -270,6 +287,10 @@ private:
             break;
 
         case KEY_TYPE[0]:
+            if (fields.hasType)
+            {
+                return false;
+            }
             if (!cursor.readUint8(command.clickType))
             {
                 return false;
@@ -278,6 +299,10 @@ private:
             break;
 
         case KEY_CORRELATION_ID[0]:
+            if (fields.hasCorrelationId)
+            {
+                return false;
+            }
             if (!cursor.readUint8(command.correlationId))
             {
                 return false;
@@ -555,6 +580,10 @@ private:
         {
         case KEY_PAYLOAD[0]:
         {
+            if (fields.hasCommand)
+            {
+                return false;
+            }
             std::uint8_t rawCommand = 0U;
             if (!cursor.readUint8(rawCommand))
             {
@@ -566,6 +595,10 @@ private:
         }
 
         case KEY_ID[0]:
+            if (fields.hasId)
+            {
+                return false;
+            }
             if (!cursor.readUint8(command.actuatorId))
             {
                 return false;
@@ -575,6 +608,10 @@ private:
             break;
 
         case KEY_STATE[0]:
+            if (hasStateField(fields))
+            {
+                return false;
+            }
             if (cursor.nextValueIsArray())
             {
                 if (!cursor.readPackedState(command.packedStateBytes, command.packedStateLength))
@@ -594,6 +631,10 @@ private:
             break;
 
         case KEY_TYPE[0]:
+            if (fields.hasType)
+            {
+                return false;
+            }
             if (!cursor.readUint8(command.clickType))
             {
                 return false;
@@ -602,6 +643,10 @@ private:
             break;
 
         case KEY_CORRELATION_ID[0]:
+            if (fields.hasCorrelationId)
+            {
+                return false;
+            }
             if (!cursor.readUint8(command.correlationId))
             {
                 return false;
