@@ -75,7 +75,7 @@ Install from the PlatformIO Registry:
 
 ```ini
 lib_deps =
-    labodj/lsh-bridge@^1.5.0
+    labodj/lsh-bridge@^1.6.0
 ```
 
 The embedding firmware owns board choice, serial pins, topic names, firmware identity
