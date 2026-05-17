@@ -17,6 +17,19 @@ If you are new to LSH as a whole, start with the
 [`labo-smart-home` documentation map](https://github.com/labodj/labo-smart-home/blob/main/DOCS.md)
 before tuning bridge settings.
 
+For a first end-to-end installation, prefer the stack-generated path over copying
+capacity, topic and codec flags by hand:
+
+```bash
+lsh-stack new my-lsh-installation
+cd my-lsh-installation
+lsh-stack setup
+```
+
+That command creates the consumer PlatformIO projects and writes the bridge
+`platformio-bridge.ini`, coordinator config, Node-RED settings and deploy plan from the
+same controller TOML.
+
 The `main` branch can move ahead of tagged releases. For downstream projects, prefer
 released tags unless you are intentionally testing coordinated unreleased work across
 the LSH repos.
