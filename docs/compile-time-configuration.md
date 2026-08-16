@@ -35,6 +35,15 @@ These limits are validation rules, not display-only settings. If the controller 
 more resources than the bridge was compiled for, or a longer device name than
 `CONFIG_MAX_NAME_LENGTH`, the bridge rejects the topology.
 
+`CONFIG_MAX_ACTUATORS` and `CONFIG_MAX_BUTTONS` may be zero for controller profiles
+without that resource type. The bridge keeps the logical capacity at zero while
+reserving the single internal slot required by ETL's fixed-capacity vector
+implementation.
+
+Controller names are also MQTT topic segments. The bridge therefore accepts only ASCII
+letters, digits, `_` and `-`, matching the validation performed by the `lsh-core`
+configuration generator.
+
 ## Serial Bridge Settings
 
 | Macro                                                | Default                           | What it affects                                                     |

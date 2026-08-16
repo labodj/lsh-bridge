@@ -32,17 +32,21 @@ namespace constants
 namespace ping
 {
 #ifndef CONFIG_PING_INTERVAL_CONTROLLINO_MS
-static constexpr const std::uint16_t PING_INTERVAL_CONTROLLINO_MS = 10000U;  //!< Default ping interval
+static constexpr const std::uint32_t PING_INTERVAL_CONTROLLINO_MS = 10000U;  //!< Default ping interval
 #else
-static constexpr const std::uint16_t PING_INTERVAL_CONTROLLINO_MS = CONFIG_PING_INTERVAL_CONTROLLINO_MS;  //!< Ping interval
+static constexpr const std::uint32_t PING_INTERVAL_CONTROLLINO_MS = CONFIG_PING_INTERVAL_CONTROLLINO_MS;  //!< Ping interval
 #endif  // CONFIG_PING_INTERVAL_CONTROLLINO_MS
 
 #ifndef CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS
-static constexpr const std::uint16_t CONNECTION_TIMEOUT_CONTROLLINO_MS =
+static constexpr const std::uint32_t CONNECTION_TIMEOUT_CONTROLLINO_MS =
     PING_INTERVAL_CONTROLLINO_MS + 200U;  //!< Default connection timeout
 #else
-static constexpr const std::uint16_t CONNECTION_TIMEOUT_CONTROLLINO_MS = CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS;  //!< Connection timeout
+static constexpr const std::uint32_t CONNECTION_TIMEOUT_CONTROLLINO_MS = CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS;  //!< Connection timeout
 #endif  // CONFIG_CONNECTION_TIMEOUT_CONTROLLINO_MS
+
+static_assert(PING_INTERVAL_CONTROLLINO_MS > 0U, "PING_INTERVAL_CONTROLLINO_MS must be greater than zero.");
+static_assert(CONNECTION_TIMEOUT_CONTROLLINO_MS > PING_INTERVAL_CONTROLLINO_MS,
+              "CONNECTION_TIMEOUT_CONTROLLINO_MS must be greater than PING_INTERVAL_CONTROLLINO_MS.");
 }  // namespace ping
 }  // namespace constants
 

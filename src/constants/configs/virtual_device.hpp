@@ -22,6 +22,7 @@
 #ifndef LSH_BRIDGE_CONSTANTS_CONFIGS_VIRTUAL_DEVICE_HPP
 #define LSH_BRIDGE_CONSTANTS_CONFIGS_VIRTUAL_DEVICE_HPP
 
+#include <cstddef>
 #include <cstdint>
 
 /**
@@ -53,6 +54,11 @@ static_assert(CONFIG_MAX_NAME_LENGTH > 0U, "CONFIG_MAX_NAME_LENGTH must be great
 static_assert(CONFIG_MAX_NAME_LENGTH <= UINT8_MAX, "CONFIG_MAX_NAME_LENGTH must fit in uint8_t.");
 static constexpr const std::uint8_t MAX_NAME_LENGTH = CONFIG_MAX_NAME_LENGTH;  //!< Max device name length
 #endif  // CONFIG_MAX_NAME_LENGTH
+
+// ETL vectors require a non-zero physical capacity. Keep zero available as a
+// valid logical limit for controller profiles without actuators or buttons.
+inline constexpr std::size_t ACTUATOR_CONTAINER_CAPACITY = MAX_ACTUATORS == 0U ? 1U : MAX_ACTUATORS;
+inline constexpr std::size_t BUTTON_CONTAINER_CAPACITY = MAX_BUTTONS == 0U ? 1U : MAX_BUTTONS;
 }  // namespace virtualDevice
 
 }  // namespace constants

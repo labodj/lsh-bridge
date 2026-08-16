@@ -482,7 +482,7 @@ public:
     AsyncMqttClient *mqttMessageBoundClient = nullptr;
     MqttCommandQueue mqttCommandQueue{};
     BridgeOptions options{};
-    etl::vector<LSHNode, constants::virtualDevice::MAX_ACTUATORS> homieNodes{};
+    etl::vector<LSHNode, constants::virtualDevice::ACTUATOR_CONTAINER_CAPACITY> homieNodes{};
     DeviceDetailsSnapshot pendingTopologyDetails{};  //!< Validated topology waiting to be persisted before a controlled reboot.
 
     void capturePreviousBridgeBreadcrumb()
@@ -1296,16 +1296,25 @@ public:
     /**
      * @brief Dispatch one controller-decoded payload into the outer bridge runtime.
      * @details Serial decoding and high-level bridge policy are kept separate on
-     *          purpose. `ControllerSerialLink` decides whether a frame is valid;
-     *          this switch decides what that validated frame means for bridge
-     *          state, MQTT publishing and controller resynchronization.
+     *          purpose. The link classifies each decoded frame and independently
+     *          decides whether it may refresh liveness; this switch applies the
+     *          type-specific validation, recovery and forwarding policy.
      *
      * @param code semantic result produced by the serial decoder.
-     * @param messageDocument validated payload document that remains owned by
+     * @param messageDocument decoded payload document that remains owned by
      *        `ControllerSerialLink` for the duration of this callback.
      */
     void handleControllerSerialMessage(constants::DeserializeExitCode code, const JsonDocument &messageDocument)
     {
+        const bool isControllerEvent = code == DeserializeExitCode::OK_NETWORK_CLICK_REQUEST ||
+                                       code == DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM ||
+                                       code == DeserializeExitCode::OK_OTHER_PAYLOAD;
+        if (isControllerEvent && runtimeState.bootstrapPhase == BootstrapPhase::TOPOLOGY_MIGRATION_PENDING_REBOOT)
+        {
+            DPL("Dropping controller event while the cached MQTT topology is pending replacement.");
+            return;
+        }
+
         switch (code)
         {
         case DeserializeExitCode::OK_BOOT:

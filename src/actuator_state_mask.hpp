@@ -288,7 +288,7 @@ public:
     }
 
 private:
-    etl::bitset<constants::virtualDevice::MAX_ACTUATORS> bits{};
+    etl::bitset<constants::virtualDevice::ACTUATOR_CONTAINER_CAPACITY> bits{};
 };
 
 using ActuatorStateMask = ActuatorStateMaskImpl<(constants::virtualDevice::MAX_ACTUATORS <= 32U)>;

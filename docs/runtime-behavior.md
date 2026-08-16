@@ -51,6 +51,8 @@ If no valid cache is present yet:
 If the controller later reports a different topology:
 
 - the bridge stops trusting runtime state immediately
+- controller-backed event payloads are dropped while the old MQTT topology is pending
+  replacement
 - the new topology is saved to NVS from the main loop
 - a `topology_changed` diagnostic is queued when possible
 - after the save succeeds, the bridge performs one controlled reboot

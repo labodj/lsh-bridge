@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string_view>
 
 #include <Preferences.h>
 #include <etl/bitset.h>
@@ -219,6 +220,11 @@ template <typename TIdVector> [[nodiscard]] auto validatePositiveUniqueIds(const
     std::memcpy(nameBuffer, record + offset, nameLength);
     offset += nameLength;
 
+    if (!isValidDeviceName(std::string_view(nameBuffer, nameLength)))
+    {
+        return false;
+    }
+
     const std::uint8_t *const actuatorIds = record + offset;
     offset += actuatorCount;
     const std::uint8_t *const buttonIds = record + offset;
@@ -299,7 +305,7 @@ auto load(DeviceDetailsSnapshot &outDetails) -> bool
  */
 auto save(const DeviceDetailsSnapshot &details) -> bool
 {
-    if (details.name.empty() || details.actuatorIds.size() > constants::virtualDevice::MAX_ACTUATORS ||
+    if (!isValidDeviceName(details.name.c_str()) || details.actuatorIds.size() > constants::virtualDevice::MAX_ACTUATORS ||
         details.buttonIds.size() > constants::virtualDevice::MAX_BUTTONS)
     {
         return false;

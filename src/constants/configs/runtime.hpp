@@ -28,34 +28,34 @@ namespace constants
 namespace runtime
 {
 #ifndef CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS
-static constexpr const std::uint16_t BOOTSTRAP_REQUEST_INTERVAL_MS =
+static constexpr const std::uint32_t BOOTSTRAP_REQUEST_INTERVAL_MS =
     500U;  //!< Delay between controller detail/state requests during bootstrap and controller resync.
 #else
-static constexpr const std::uint16_t BOOTSTRAP_REQUEST_INTERVAL_MS =
+static constexpr const std::uint32_t BOOTSTRAP_REQUEST_INTERVAL_MS =
     CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS;  //!< Delay between controller detail/state requests during bootstrap and controller resync.
 #endif  // CONFIG_BOOTSTRAP_REQUEST_INTERVAL_MS
 
 #ifndef CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS
-static constexpr const std::uint16_t TOPOLOGY_SAVE_RETRY_INTERVAL_MS =
+static constexpr const std::uint32_t TOPOLOGY_SAVE_RETRY_INTERVAL_MS =
     BOOTSTRAP_REQUEST_INTERVAL_MS;  //!< Delay between repeated NVS save attempts while a topology migration is pending.
 #else
-static constexpr const std::uint16_t TOPOLOGY_SAVE_RETRY_INTERVAL_MS =
+static constexpr const std::uint32_t TOPOLOGY_SAVE_RETRY_INTERVAL_MS =
     CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS;  //!< Delay between repeated NVS save attempts while a topology migration is pending.
 #endif  // CONFIG_TOPOLOGY_SAVE_RETRY_INTERVAL_MS
 
 #ifndef CONFIG_TOPOLOGY_REBOOT_GRACE_MS
-static constexpr const std::uint16_t TOPOLOGY_REBOOT_GRACE_MS =
+static constexpr const std::uint32_t TOPOLOGY_REBOOT_GRACE_MS =
     BOOTSTRAP_REQUEST_INTERVAL_MS;  //!< Hard grace window given to the MQTT client before rebooting after a successful topology save.
 #else
-static constexpr const std::uint16_t TOPOLOGY_REBOOT_GRACE_MS =
+static constexpr const std::uint32_t TOPOLOGY_REBOOT_GRACE_MS =
     CONFIG_TOPOLOGY_REBOOT_GRACE_MS;  //!< Hard grace window given to the MQTT client before rebooting after a successful topology save.
 #endif  // CONFIG_TOPOLOGY_REBOOT_GRACE_MS
 
 #ifndef CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS
-static constexpr const std::uint16_t STATE_PUBLISH_SETTLE_INTERVAL_MS =
+static constexpr const std::uint32_t STATE_PUBLISH_SETTLE_INTERVAL_MS =
     40U;  //!< Quiet window used before publishing cached state changes to MQTT and Homie.
 #else
-static constexpr const std::uint16_t STATE_PUBLISH_SETTLE_INTERVAL_MS =
+static constexpr const std::uint32_t STATE_PUBLISH_SETTLE_INTERVAL_MS =
     CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS;  //!< Quiet window used before publishing cached state changes to MQTT and Homie.
 #endif  // CONFIG_STATE_PUBLISH_SETTLE_INTERVAL_MS
 
@@ -80,18 +80,18 @@ static constexpr const std::uint8_t MQTT_MAX_COMMANDS_PER_LOOP =
 #endif  // CONFIG_MQTT_MAX_COMMANDS_PER_LOOP
 
 #ifndef CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS
-static constexpr const std::uint16_t ACTUATOR_COMMAND_SETTLE_INTERVAL_MS =
+static constexpr const std::uint32_t ACTUATOR_COMMAND_SETTLE_INTERVAL_MS =
     50U;  //!< Quiet window used to coalesce bursts of actuator commands into one SET_STATE.
 #else
-static constexpr const std::uint16_t ACTUATOR_COMMAND_SETTLE_INTERVAL_MS =
+static constexpr const std::uint32_t ACTUATOR_COMMAND_SETTLE_INTERVAL_MS =
     CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS;  //!< Quiet window used to coalesce bursts of actuator commands into one SET_STATE.
 #endif  // CONFIG_ACTUATOR_COMMAND_SETTLE_INTERVAL_MS
 
 #ifndef CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS
-static constexpr const std::uint16_t ACTUATOR_COMMAND_MAX_PENDING_MS =
+static constexpr const std::uint32_t ACTUATOR_COMMAND_MAX_PENDING_MS =
     1000U;  //!< Hard safety limit for an unstable pending actuator batch.
 #else
-static constexpr const std::uint16_t ACTUATOR_COMMAND_MAX_PENDING_MS =
+static constexpr const std::uint32_t ACTUATOR_COMMAND_MAX_PENDING_MS =
     CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS;  //!< Hard safety limit for an unstable pending actuator batch.
 #endif  // CONFIG_ACTUATOR_COMMAND_MAX_PENDING_MS
 
@@ -105,6 +105,7 @@ static constexpr const std::uint16_t ACTUATOR_COMMAND_MAX_MUTATION_COUNT =
 
 static_assert(MQTT_COMMAND_QUEUE_CAPACITY > 0U, "MQTT_COMMAND_QUEUE_CAPACITY must be at least 1.");
 static_assert(MQTT_MAX_COMMANDS_PER_LOOP > 0U, "MQTT_MAX_COMMANDS_PER_LOOP must be at least 1.");
+static_assert(BOOTSTRAP_REQUEST_INTERVAL_MS > 0U, "BOOTSTRAP_REQUEST_INTERVAL_MS must be greater than 0.");
 static_assert(TOPOLOGY_SAVE_RETRY_INTERVAL_MS > 0U, "TOPOLOGY_SAVE_RETRY_INTERVAL_MS must be greater than 0.");
 static_assert(TOPOLOGY_REBOOT_GRACE_MS > 0U, "TOPOLOGY_REBOOT_GRACE_MS must be greater than 0.");
 static_assert(ACTUATOR_COMMAND_SETTLE_INTERVAL_MS > 0U, "ACTUATOR_COMMAND_SETTLE_INTERVAL_MS must be greater than 0.");

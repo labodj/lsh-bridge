@@ -52,20 +52,23 @@ static constexpr const std::uint32_t ARDCOM_SERIAL_BAUD = CONFIG_ARDCOM_SERIAL_B
 #endif  // CONFIG_ARDCOM_SERIAL_BAUD
 
 #ifndef CONFIG_ARDCOM_SERIAL_TIMEOUT_MS
-static constexpr const std::uint8_t ARDCOM_SERIAL_TIMEOUT_MS =
+static constexpr const std::uint32_t ARDCOM_SERIAL_TIMEOUT_MS =
     5U;  //!< Compatibility fallback used as the default MsgPack frame-idle timeout.
 #else
-static constexpr const std::uint8_t ARDCOM_SERIAL_TIMEOUT_MS =
+static constexpr const std::uint32_t ARDCOM_SERIAL_TIMEOUT_MS =
     CONFIG_ARDCOM_SERIAL_TIMEOUT_MS;  //!< Compatibility fallback used as the default MsgPack frame-idle timeout.
 #endif  // CONFIG_ARDCOM_SERIAL_TIMEOUT_MS
 
 #ifndef CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS
-static constexpr const std::uint8_t ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS =
+static constexpr const std::uint32_t ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS =
     ARDCOM_SERIAL_TIMEOUT_MS;  //!< Maximum silence while a serial MsgPack frame is still incomplete.
 #else
-static constexpr const std::uint8_t ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS =
+static constexpr const std::uint32_t ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS =
     CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS;  //!< Maximum silence while a serial MsgPack frame is still incomplete.
 #endif  // CONFIG_ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS
+
+static_assert(ARDCOM_SERIAL_TIMEOUT_MS > 0U, "ARDCOM_SERIAL_TIMEOUT_MS must be greater than zero.");
+static_assert(ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS > 0U, "ARDCOM_SERIAL_MSGPACK_FRAME_IDLE_TIMEOUT_MS must be greater than zero.");
 }  // namespace controllerSerial
 }  // namespace constants
 

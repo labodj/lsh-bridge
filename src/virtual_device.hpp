@@ -22,6 +22,7 @@
 #define LSH_BRIDGE_VIRTUAL_DEVICE_HPP
 
 #include <cstdint>
+#include <string_view>
 
 #include <ArduinoJson.h>
 #include <etl/string.h>
@@ -30,14 +31,38 @@
 #include "actuator_state_mask.hpp"
 #include "constants/configs/virtual_device.hpp"
 
+/** @brief Return whether a controller name is safe as one MQTT topic segment. */
+[[nodiscard]] constexpr auto isValidDeviceName(std::string_view name) noexcept -> bool
+{
+    if (name.empty())
+    {
+        return false;
+    }
+
+    for (const char character : name)
+    {
+        const bool isAsciiLetter = (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z');
+        const bool isDigit = character >= '0' && character <= '9';
+        if (!isAsciiLetter && !isDigit && character != '_' && character != '-')
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(isValidDeviceName("bridge_1-A"));
+static_assert(!isValidDeviceName(""));
+static_assert(!isValidDeviceName("bridge/name"));
+
 /**
  * @brief Plain validated snapshot of controller topology details.
  */
 struct DeviceDetailsSnapshot
 {
-    etl::string<constants::virtualDevice::MAX_NAME_LENGTH> name{};                     //!< Validated controller name.
-    etl::vector<std::uint8_t, constants::virtualDevice::MAX_ACTUATORS> actuatorIds{};  //!< Validated logical actuator IDs.
-    etl::vector<std::uint8_t, constants::virtualDevice::MAX_BUTTONS> buttonIds{};      //!< Validated logical button IDs.
+    etl::string<constants::virtualDevice::MAX_NAME_LENGTH> name{};                                   //!< Validated controller name.
+    etl::vector<std::uint8_t, constants::virtualDevice::ACTUATOR_CONTAINER_CAPACITY> actuatorIds{};  //!< Validated logical actuator IDs.
+    etl::vector<std::uint8_t, constants::virtualDevice::BUTTON_CONTAINER_CAPACITY> buttonIds{};      //!< Validated logical button IDs.
 
     /** @brief Reset the snapshot to an empty invalid state. */
     void clear() noexcept
@@ -77,8 +102,8 @@ private:
 
     // Stores the original actuator UUIDs. This is necessary for initializing Homie nodes,
     // building MQTT/Homie topology and mapping state indexes back to logical IDs.
-    etl::vector<std::uint8_t, constants::virtualDevice::MAX_ACTUATORS> actuatorIds{};
-    etl::vector<std::uint8_t, constants::virtualDevice::MAX_BUTTONS>
+    etl::vector<std::uint8_t, constants::virtualDevice::ACTUATOR_CONTAINER_CAPACITY> actuatorIds{};
+    etl::vector<std::uint8_t, constants::virtualDevice::BUTTON_CONTAINER_CAPACITY>
         buttonIds{};  //!< Stores original button IDs for cache-backed `DEVICE_DETAILS` replies.
 
 public:

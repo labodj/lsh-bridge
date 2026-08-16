@@ -70,7 +70,8 @@ enum class DeserializeExitCode : std::uint8_t
     ERR_MISSING_KEY_BUTTONS_IDS,              //!< Missing buttons UUIDs key from decoded payload
     ERR_ACTUATORS_IDS_NUMBER_IMPLAUSIBLE,     //!< Total actuators UUIDs number is different than total actuators
     ERR_ACTUATOR_ID_IMPLAUSIBLE,              //!< Actuator IDs must be unique positive uint8_t values
-    ERR_BUTTON_ID_IMPLAUSIBLE                 //!< Button IDs must be unique positive uint8_t values
+    ERR_BUTTON_ID_IMPLAUSIBLE,                //!< Button IDs must be unique positive uint8_t values
+    ERR_INVALID_NAME                          //!< Device name is not a safe ASCII MQTT topic segment
 };  // namespace DeserializeExitCode
 }  // namespace constants
 

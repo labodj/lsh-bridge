@@ -23,6 +23,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <string_view>
 
 #include <Print.h>
 
@@ -60,6 +61,28 @@ struct ValidatedNetworkClickPayload
 };
 
 using DesiredActuatorStateBitset = ControllerSerialLink::DesiredActuatorStateBitset;
+
+[[nodiscard]] constexpr auto isLivenessEligibleFrameType(DeserializeExitCode code) noexcept -> bool
+{
+    switch (code)
+    {
+    case DeserializeExitCode::OK_DETAILS:
+    case DeserializeExitCode::OK_STATE:
+    case DeserializeExitCode::OK_PING:
+    case DeserializeExitCode::OK_BOOT:
+    case DeserializeExitCode::OK_NETWORK_CLICK_REQUEST:
+    case DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM:
+    case DeserializeExitCode::OK_OTHER_PAYLOAD:
+        return true;
+
+    default:
+        return false;
+    }
+}
+
+static_assert(isLivenessEligibleFrameType(DeserializeExitCode::OK_DETAILS));
+static_assert(isLivenessEligibleFrameType(DeserializeExitCode::OK_OTHER_PAYLOAD));
+static_assert(!isLivenessEligibleFrameType(DeserializeExitCode::ERR_UNKNOWN_PAYLOAD));
 
 /**
  * @brief Return the bit mask used to unpack one packed state bit.
@@ -377,6 +400,11 @@ auto parseReceivedDetailsSnapshot(const JsonDocument &receivedDoc, DeviceDetails
         DPL("Error: Device name is too long for this bridge build.");
         return DeserializeExitCode::ERR_NAME_TOO_LONG;
     }
+    if (!isValidDeviceName(std::string_view(deviceName, deviceNameLength)))
+    {
+        DPL("Error: Device name is not a safe MQTT topic segment.");
+        return DeserializeExitCode::ERR_INVALID_NAME;
+    }
     candidate.name.assign(deviceName);
 
     const JsonArrayConst actuatorIds = receivedDoc[KEY_ACTUATORS_ARRAY].as<JsonArrayConst>();
@@ -393,13 +421,13 @@ auto parseReceivedDetailsSnapshot(const JsonDocument &receivedDoc, DeviceDetails
         return DeserializeExitCode::ERR_MISSING_KEY_BUTTONS_IDS;
     }
 
-    if (!copyValidatedPositiveUniqueIds(actuatorIds, candidate.actuatorIds))
+    if (actuatorIds.size() > constants::virtualDevice::MAX_ACTUATORS || !copyValidatedPositiveUniqueIds(actuatorIds, candidate.actuatorIds))
     {
         DPL("Error: Invalid actuator IDs in device details JSON.");
         return DeserializeExitCode::ERR_ACTUATOR_ID_IMPLAUSIBLE;
     }
 
-    if (!copyValidatedPositiveUniqueIds(buttonIds, candidate.buttonIds))
+    if (buttonIds.size() > constants::virtualDevice::MAX_BUTTONS || !copyValidatedPositiveUniqueIds(buttonIds, candidate.buttonIds))
     {
         DPL("Error: Invalid button IDs in device details JSON.");
         return DeserializeExitCode::ERR_BUTTON_ID_IMPLAUSIBLE;
@@ -518,6 +546,31 @@ auto validateReceivedNetworkClickPayload(const JsonDocument &receivedDoc, Valida
 
     return command == Command::NETWORK_CLICK_REQUEST ? DeserializeExitCode::OK_NETWORK_CLICK_REQUEST
                                                      : DeserializeExitCode::OK_NETWORK_CLICK_CONFIRM;
+}
+
+/**
+ * @brief Decide whether one decoded controller frame may refresh serial liveness.
+ * @details Details and state frames are validated here without changing the
+ *          command classification delivered to the runtime dispatcher. That
+ *          preserves its existing malformed-frame recovery policy.
+ */
+[[nodiscard]] auto isAcceptedControllerFrame(DeserializeExitCode code, const JsonDocument &receivedDoc, std::uint8_t totalActuators) -> bool
+{
+    switch (code)
+    {
+    case DeserializeExitCode::OK_DETAILS:
+    {
+        DeviceDetailsSnapshot details{};
+        return parseReceivedDetailsSnapshot(receivedDoc, details) == DeserializeExitCode::OK_DETAILS;
+    }
+    case DeserializeExitCode::OK_STATE:
+    {
+        ActuatorStateBitset state{};
+        return decodeReceivedPackedState(receivedDoc, totalActuators, state) == DeserializeExitCode::OK_STATE;
+    }
+    default:
+        return isLivenessEligibleFrameType(code);
+    }
 }
 
 }  // namespace
@@ -1058,8 +1111,7 @@ void ControllerSerialLink::processPendingActuatorBatch()
 
     const auto now = timeKeeper::getTime();
     const bool settleWindowElapsed = (now - lastDesiredUpdate_ms) >= constants::runtime::ACTUATOR_COMMAND_SETTLE_INTERVAL_MS;
-    const bool pendingWindowExceeded =
-        firstDesiredUpdate_ms != 0U && (now - firstDesiredUpdate_ms) >= constants::runtime::ACTUATOR_COMMAND_MAX_PENDING_MS;
+    const bool pendingWindowExceeded = (now - firstDesiredUpdate_ms) >= constants::runtime::ACTUATOR_COMMAND_MAX_PENDING_MS;
     const bool mutationBudgetExceeded = pendingMutationCount >= constants::runtime::ACTUATOR_COMMAND_MAX_MUTATION_COUNT;
 
     if (!settleWindowElapsed && !pendingWindowExceeded && !mutationBudgetExceeded)
@@ -1305,8 +1357,8 @@ void ControllerSerialLink::onMessage(MessageCallback callback)
  *          pure MsgPack payload, so the serial path never relies on stream
  *          timeouts as implicit framing. Each call also obeys a raw-byte
  *          fairness budget so noisy UART traffic cannot monopolize one bridge
- *          loop iteration. When a complete payload is decoded and validated,
- *          the method invokes the registered callback and returns immediately.
+ *          loop iteration. Complete decoded payloads reach the runtime callback,
+ *          while only semantically valid frames refresh serial liveness.
  */
 void ControllerSerialLink::processSerialBuffer()
 {
@@ -1347,8 +1399,11 @@ void ControllerSerialLink::processSerialBuffer()
             return;
         }
 
-        this->updateLastReceivedTime();
         const auto messageType = this->deserialize();
+        if (isAcceptedControllerFrame(messageType, this->receivedDoc, this->virtualDevice.getTotalActuators()))
+        {
+            this->updateLastReceivedTime();
+        }
         if (this->messageCallback.is_valid())
         {
             this->messageCallback(messageType, this->receivedDoc);
@@ -1392,8 +1447,11 @@ void ControllerSerialLink::processSerialBuffer()
 
             if (deserializationError == DeserializationError::Ok)
             {
-                this->updateLastReceivedTime();
                 const auto messageType = this->deserialize();
+                if (isAcceptedControllerFrame(messageType, this->receivedDoc, this->virtualDevice.getTotalActuators()))
+                {
+                    this->updateLastReceivedTime();
+                }
                 if (this->messageCallback.is_valid())
                 {
                     // The receivedDoc is populated. It uses zero-copy and points
@@ -1430,11 +1488,10 @@ void ControllerSerialLink::processSerialBuffer()
 }
 
 /**
- * @brief Deserializes the last received JSON document and identifies the
- * payload type.
- * @details This method is state-agnostic. It only determines what kind of
- * message was received and returns a corresponding exit code. The application
- * loop is responsible for acting on this information.
+ * @brief Identify the payload type of the last decoded controller document.
+ * @details Classification remains separate from serial-liveness validation so
+ *          the application callback can preserve its type-specific recovery
+ *          policy for malformed details and state frames.
  * @return A DeserializeExitCode representing the received message type.
  */
 auto ControllerSerialLink::deserialize() -> constants::DeserializeExitCode
