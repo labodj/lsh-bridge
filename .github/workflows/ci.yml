@@ -84,6 +84,7 @@ jobs:
       matrix:
         env:
           - release
+          - release_zero_capacity
           - release_aggressive
           - release_json_serial
           - release_msgpack_mqtt
@@ -131,6 +132,10 @@ jobs:
           path.write_text(contents, encoding="utf-8")
           PY
           platformio run -d examples/basic-homie-bridge -e "${{ matrix.env }}"
+
+      - name: Run native decoder tests
+        if: matrix.env == 'release'
+        run: platformio test -e native_json -e native_msgpack
 
   package-registry-smoke:
     needs: validate-generated-protocol

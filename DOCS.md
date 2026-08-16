@@ -47,6 +47,8 @@ and configuration details.
   Markdown absolute so the PlatformIO Registry rendering stays valid.
 - Verify the vendored protocol snapshot with
   `python3 tools/update_lsh_protocol.py --check`.
+- Run the host-side MQTT decoder checks with
+  `platformio test -e native_json -e native_msgpack`.
 - Refresh the vendored protocol after changes in `lsh-protocol`:
 
 ```bash
