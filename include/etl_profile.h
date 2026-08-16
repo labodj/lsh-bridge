@@ -3,9 +3,9 @@
  * @author  Jacopo Labardi (labodj)
  * @brief   Defines the default ETL compile-time profile used by lsh-bridge.
  * @details This file provides the default ETL policy used by `lsh-bridge` on
- *          the supported Arduino/PlatformIO targets. ETL auto-detects the
- *          active compiler and language support through
- *          `etl/profiles/auto.h`.
+ *          the supported Arduino/PlatformIO targets. ETL's `platform.h`
+ *          auto-detects the active compiler and language support after loading
+ *          this profile.
  *
  *          Advanced consumers that need a different ETL setup may define
  *          `LSH_ETL_PROFILE_OVERRIDE_HEADER` to a quoted header name through
@@ -33,9 +33,6 @@
 // Default ETL safety/debug policy for lsh-bridge.
 #define ETL_VERBOSE_ERRORS
 #define ETL_CHECK_PUSH_POP
-
-// Let ETL detect the active compiler, language level and platform traits.
-#include "etl/profiles/auto.h"
 
 // Optional project-local override hook for non-default toolchains or policies.
 #ifdef LSH_ETL_PROFILE_OVERRIDE_HEADER

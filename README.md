@@ -53,6 +53,7 @@ remain controller responsibilities.
 For the documented bridge path:
 
 - PlatformIO
+- a C++20-compatible toolchain
 - an ESP32 board supported by `pioarduino/platform-espressif32`
 - a controller running `lsh-core`
 - a hardware UART between controller and ESP32
@@ -74,6 +75,7 @@ platformio run -d examples/basic-homie-bridge -e release
 The example also keeps CI-backed variants for codec and optimization coverage:
 
 - `release`: conservative first build
+- `release_zero_capacity`: compile-check profile with no actuators or buttons
 - `release_aggressive`: more aggressive optimization profile
 - `release_json_serial`: JSON on the controller UART
 - `release_msgpack_mqtt`: MessagePack on serial and MQTT
