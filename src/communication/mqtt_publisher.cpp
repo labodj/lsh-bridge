@@ -21,7 +21,7 @@
 #include "communication/mqtt_publisher.hpp"
 
 #include <ArduinoJson.h>
-#include <AsyncMqttClient.h>
+#include <espMqttClientAsync.h>
 
 #include "communication/checked_writer.hpp"
 #include "communication/mqtt_topics_builder.hpp"
@@ -32,7 +32,7 @@
 
 namespace
 {
-AsyncMqttClient *mqttClient = nullptr;  //!< Active MQTT client bound by the bridge runtime.
+espMqttClientAsync *mqttClient = nullptr;  //!< Active MQTT client bound by the bridge runtime.
 }  // namespace
 
 namespace MqttPublisher
@@ -43,7 +43,7 @@ namespace MqttPublisher
  *
  * @param client client to set.
  */
-void setMqttClient(AsyncMqttClient *const client)
+void setMqttClient(espMqttClientAsync *const client)
 {
     mqttClient = client;
 }
@@ -56,7 +56,7 @@ void setMqttClient(AsyncMqttClient *const client)
  * @param qos MQTT QoS.
  * @param payload serialized payload bytes.
  * @param payloadSize number of bytes to publish.
- * @return true if AsyncMqttClient accepted the publish and returned a packet id.
+ * @return true if espMqttClient accepted the publish and returned a packet id.
  * @return false if the client/topic/payload is not publishable right now.
  */
 auto sendRaw(const char *const topic, bool retain, std::uint8_t qos, const char *const payload, std::size_t payloadSize) -> bool
@@ -66,7 +66,7 @@ auto sendRaw(const char *const topic, bool retain, std::uint8_t qos, const char 
         return false;
     }
 
-    return mqttClient->publish(topic, qos, retain, payload, payloadSize) != 0U;
+    return mqttClient->publish(topic, qos, retain, reinterpret_cast<const std::uint8_t *>(payload), payloadSize) != 0U;
 }
 
 /**

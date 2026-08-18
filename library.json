@@ -33,7 +33,11 @@
     {
       "owner": "labodj",
       "name": "homie-v5",
-      "version": "3.7.1"
+      "version": "4.0.0"
+    },
+    {
+      "name": "espMqttClient",
+      "version": "https://github.com/bertmelis/espMqttClient/archive/de31cb28e02e782da4e37a8d7ffab991cce32585.zip"
     }
   ],
   "build": {

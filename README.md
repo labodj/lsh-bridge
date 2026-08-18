@@ -90,8 +90,14 @@ Install from the PlatformIO Registry:
 
 ```ini
 lib_deps =
+    ESP32Async/AsyncTCP@^3.5.0
+    labodj/homie-v5@4.0.0
     labodj/lsh-bridge@^1.7.1
 ```
+
+`AsyncTCP` is also a transitive dependency of the MQTT backend. Listing it in the
+firmware project makes its conditional ESP32 transport header visible to PlatformIO's
+Library Dependency Finder; PlatformIO still resolves a single installed copy.
 
 The embedding firmware owns board choice, serial pins, topic names, firmware identity
 and deployment policy. A minimal Arduino entry point looks like this:
@@ -237,7 +243,8 @@ Validated baseline:
 - ESP32
 - Arduino framework
 - `pioarduino/platform-espressif32`
-- Homie convention v5 through `labodj/homie-v5`
+- Homie convention v5 through `labodj/homie-v5` 4.0.0 and its maintained
+  `bertmelis/espMqttClient` backend
 
 Recommended PlatformIO platform:
 

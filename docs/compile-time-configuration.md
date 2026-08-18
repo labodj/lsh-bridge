@@ -101,8 +101,13 @@ Homie dependency compiles its own translation units, so it must see the same con
 selector as `lsh-bridge`. The bridge rejects missing or legacy values at compile time.
 Use the Homie dependency declared by `lsh-bridge`; older manual pins may miss the v5
 description and property-retention behavior expected by the bridge. The current source
-pins `labodj/homie-v5` to `3.7.1` in
+pins `labodj/homie-v5` to `4.0.0` in
 [`library.json`](https://github.com/labodj/lsh-bridge/blob/main/library.json).
+
+The embedding firmware should list `ESP32Async/AsyncTCP@^3.5.0` directly in `lib_deps`.
+The MQTT backend already depends on it transitively, but the direct firmware entry makes
+the backend's conditional ESP32 transport header visible to PlatformIO's Library
+Dependency Finder. PlatformIO resolves both declarations to one installed package.
 
 The identity macros must expand to string literals because the Homie dependency builds
 its firmware identity through macro concatenation.

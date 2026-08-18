@@ -100,7 +100,7 @@ When either limit is exceeded:
 
 ## MQTT Inbound Queue Behavior
 
-The AsyncMqttClient callback does not parse and route commands immediately. It validates
+The espMqttClient callback does not parse and route commands immediately. It validates
 complete frames and copies accepted commands into a small bridge-side queue. The main
 loop drains that queue with a bounded fairness policy.
 

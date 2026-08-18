@@ -25,8 +25,11 @@
 #include <cstdint>
 
 class HardwareSerial;
-struct HomieEvent;                        //!< Forward declaration of the Homie event payload.
-struct AsyncMqttClientMessageProperties;  //!< Forward declaration of the AsyncMqttClient message metadata.
+struct HomieEvent;  //!< Forward declaration of the Homie event payload.
+namespace espMqttClientTypes
+{
+struct MessageProperties;  //!< Forward declaration of the espMqttClient message metadata.
+}
 
 namespace lsh::bridge
 {
@@ -105,9 +108,9 @@ private:
 
     static LSHBridge *activeInstance;
     static void onHomieEventStatic(const HomieEvent &event);
-    static void onMqttMessageStatic(char *topic,
-                                    char *payload,
-                                    AsyncMqttClientMessageProperties properties,
+    static void onMqttMessageStatic(const espMqttClientTypes::MessageProperties &properties,
+                                    const char *topic,
+                                    const std::uint8_t *payload,
                                     std::size_t len,
                                     std::size_t index,
                                     std::size_t total);

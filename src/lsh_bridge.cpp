@@ -28,7 +28,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <AsyncMqttClient.h>
+#include <espMqttClientAsync.h>
 #ifdef ESP32
 #include <esp_attr.h>
 #include <WiFi.h>
@@ -478,8 +478,7 @@ public:
     runtime::RuntimeHotState runtimeState{};  //!< Hot controller-sync state grouped for locality and helper passing.
     VirtualDevice virtualDevice{};
     ControllerSerialLink controllerSerialLink;
-    AsyncMqttClient *mqttClient = nullptr;
-    AsyncMqttClient *mqttMessageBoundClient = nullptr;
+    espMqttClientAsync *mqttClient = nullptr;
     MqttCommandQueue mqttCommandQueue{};
     BridgeOptions options{};
     etl::vector<LSHNode, constants::virtualDevice::ACTUATOR_CONTAINER_CAPACITY> homieNodes{};
@@ -1391,34 +1390,25 @@ public:
 
     /**
      * @brief Bind the current Homie MQTT client to bridge-side helpers.
-     * @details The Homie runtime owns the actual `AsyncMqttClient` instance.
-     *          This helper keeps bridge-side callback registration and publisher
-     *          binding synchronized with that instance across reconnects.
+     * @details The Homie runtime owns the actual `espMqttClientAsync` instance.
+     *          This helper keeps bridge-side publishing synchronized with that
+     *          instance across reconnects.
      */
     void updateMqttClient()
     {
         // Homie exposes its MQTT client as a reference, so reaching this point
-        // always yields one concrete AsyncMqttClient instance.
+        // always yields one concrete espMqttClientAsync instance.
         auto &nextClient = Homie.getMqttClient();
 
         if (&nextClient == mqttClient)
         {
-            // The same AsyncMqttClient instance survived the reconnect, so only the
+            // The same espMqttClientAsync instance survived the reconnect, so only the
             // subscriptions may need refreshing.
             return;
         }
 
         mqttClient = &nextClient;
         MqttPublisher::setMqttClient(mqttClient);
-
-        // AsyncMqttClient stores every callback registration. The Homie MQTT
-        // client survives reconnects, so the bridge must bind its handler only
-        // once.
-        if (mqttMessageBoundClient != &nextClient)
-        {
-            mqttClient->onMessage(LSHBridge::onMqttMessageStatic);
-            mqttMessageBoundClient = &nextClient;
-        }
     }
 
     /**
@@ -1901,18 +1891,18 @@ public:
     }
 
     /**
-     * @brief Receives complete MQTT frames from the AsyncMqttClient callback.
+     * @brief Receives complete MQTT frames from the Homie MQTT callback.
      *
-     * @param topic null-terminated MQTT topic string provided by AsyncMqttClient.
+     * @param topic null-terminated MQTT topic string provided by espMqttClient.
      * @param payload pointer to the current MQTT payload chunk.
      * @param properties MQTT message flags for the current publish.
      * @param len size of the current payload chunk.
      * @param index chunk start offset inside the full publish payload.
-     * @param total total payload size announced by AsyncMqttClient.
+     * @param total total payload size announced by espMqttClient.
      */
     void handleMqttMessage(const char *topic,
-                           const char *payload,
-                           AsyncMqttClientMessageProperties properties,
+                           const std::uint8_t *payload,
+                           const espMqttClientTypes::MessageProperties &properties,
                            std::size_t len,
                            std::size_t index,
                            std::size_t total)
@@ -1969,7 +1959,7 @@ public:
             return;
         }
 
-        if (!mqttCommandQueue.enqueue(source, payload, total))
+        if (!mqttCommandQueue.enqueue(source, reinterpret_cast<const char *>(payload), total))
         {
             mqttCommandQueue.recordDroppedCommand(source);
             DPL("Dropping MQTT command because the inbound bridge queue is full. "
@@ -2050,6 +2040,7 @@ void LSHBridge::begin()
     recordBridgeLoopPhase(BridgeLoopPhase::BeginConfigureHomie);
     impl.configureHomie();
     Homie.onEvent(onHomieEventStatic);
+    Homie.setMqttMessageHandler(onMqttMessageStatic);
     impl.runtimeState.isControllerConnected = impl.controllerSerialLink.isConnected();
 
     auto runtimeDelegate = ControllerSerialLink::MessageCallback::create<Impl, &Impl::handleControllerSerialMessage>(impl);
@@ -2167,7 +2158,7 @@ void LSHBridge::onHomieEventStatic(const HomieEvent &event)
 }
 
 /**
- * @brief Static trampoline for AsyncMqttClient messages.
+ * @brief Static trampoline for espMqttClient messages dispatched by Homie.
  *
  * @param topic MQTT topic.
  * @param payload MQTT payload.
@@ -2176,12 +2167,9 @@ void LSHBridge::onHomieEventStatic(const HomieEvent &event)
  * @param index fragment index.
  * @param total total payload length.
  */
-// AsyncMqttClient's callback ABI exposes mutable pointers. The bridge treats
-// both buffers as read-only and immediately forwards them to a const-correct
-// instance method after the ABI boundary.
-void LSHBridge::onMqttMessageStatic(char *topic,
-                                    char *payload,
-                                    AsyncMqttClientMessageProperties properties,
+void LSHBridge::onMqttMessageStatic(const espMqttClientTypes::MessageProperties &properties,
+                                    const char *topic,
+                                    const std::uint8_t *payload,
                                     std::size_t len,
                                     std::size_t index,
                                     std::size_t total)

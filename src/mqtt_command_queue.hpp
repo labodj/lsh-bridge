@@ -48,7 +48,7 @@ enum class MqttRejectedCommandReason : std::uint8_t
 {
     Retained,                 //!< The broker replayed a retained command that the bridge must ignore.
     Oversize,                 //!< The payload exceeded the fixed inbound MQTT command buffer.
-    Fragmented,               //!< AsyncMqttClient delivered the command as fragments, which the bridge rejects by design.
+    Fragmented,               //!< The MQTT client delivered the command as fragments, which the bridge rejects by design.
     Malformed,                //!< The payload reached the main loop but was not a valid bridge command document.
     ControllerEvent,          //!< A controller-originated event command arrived on the MQTT command topic.
     UnsupportedForwardFailed  //!< An unsupported command could not be forwarded safely to the controller.
@@ -83,7 +83,7 @@ struct QueuedMqttCommand
 
 /**
  * @brief Fixed ring buffer used to decouple the MQTT callback from the main loop.
- * @details The queue is intentionally small and fully static. The AsyncMqttClient
+ * @details The queue is intentionally small and fully static. The espMqttClient
  *          callback only validates and copies complete frames into this buffer;
  *          parsing happens later in the main loop where it can be coordinated
  *          with controller serial traffic. Slot payload copies happen outside

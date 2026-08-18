@@ -28,11 +28,11 @@
 
 #include "constants/payloads.hpp"
 
-class AsyncMqttClient;  //!< Forward declaration of the AsyncMqttClient owned by Homie.
+class espMqttClientAsync;  //!< Forward declaration of the MQTT client owned by Homie.
 
 namespace MqttPublisher
 {
-void setMqttClient(AsyncMqttClient *client);
+void setMqttClient(espMqttClientAsync *client);
 
 [[nodiscard]] auto sendJson(const JsonDocument &jsonDoc, const char *topic, bool retain, std::uint8_t qos) -> bool;
 
