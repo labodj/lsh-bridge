@@ -48,7 +48,7 @@ jobs:
           node-version: "lts/*"
 
       - name: Lint Markdown
-        run: npx --yes markdownlint-cli2@0.22.1
+        run: npx --yes markdownlint-cli2@0.23.2
 
   smoke-test-all-target-generators:
     needs: validate-generated-shared-doc
