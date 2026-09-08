@@ -114,7 +114,7 @@ jobs:
           restore-keys: ${{ runner.os }}-platformio-
 
       - name: Install PlatformIO
-        run: python3 -m pip install --upgrade pip "platformio==6.1.19"
+        run: python3 -m pip install --upgrade pip "platformio==6.2.0"
 
       - name: Build public example
         run: |
@@ -166,7 +166,7 @@ jobs:
           restore-keys: ${{ runner.os }}-platformio-package-smoke-
 
       - name: Install PlatformIO
-        run: python3 -m pip install --upgrade pip "platformio==6.1.19"
+        run: python3 -m pip install --upgrade pip "platformio==6.2.0"
 
       - name: Pack library and build a registry-style consumer
         run: |
@@ -290,7 +290,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install PlatformIO
-        run: python3 -m pip install --upgrade pip "platformio==6.1.19"
+        run: python3 -m pip install --upgrade pip "platformio==6.2.0"
 
       - name: Publish library to PlatformIO Registry
         env:
