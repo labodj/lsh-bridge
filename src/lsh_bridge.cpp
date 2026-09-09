@@ -28,6 +28,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <atomic>
 #include <espMqttClientAsync.h>
 #ifdef ESP32
 #include <esp_attr.h>
@@ -55,6 +56,7 @@
 #include "details_cache_store.hpp"
 #include "lsh_node.hpp"
 #include "mqtt_command_decoder.hpp"
+#include "mqtt_command_assembler.hpp"
 #include "mqtt_command_queue.hpp"
 #include "utils/json_scalars.hpp"
 #include "utils/time_keeper.hpp"
@@ -480,6 +482,8 @@ public:
     ControllerSerialLink controllerSerialLink;
     espMqttClientAsync *mqttClient = nullptr;
     MqttCommandQueue mqttCommandQueue{};
+    MqttCommandAssembler<constants::controllerSerial::MQTT_COMMAND_MESSAGE_MAX_SIZE> mqttCommandAssembler{};
+    std::atomic<bool> mqttAssemblyResetPending{false};
     BridgeOptions options{};
     etl::vector<LSHNode, constants::virtualDevice::ACTUATOR_CONTAINER_CAPACITY> homieNodes{};
     DeviceDetailsSnapshot pendingTopologyDetails{};  //!< Validated topology waiting to be persisted before a controlled reboot.
@@ -932,6 +936,9 @@ public:
         lastMqttResyncAttemptMs = 0U;
         clearPendingRuntimeState();
         mqttCommandQueue.clear();
+        // The receive callback owns the assembly buffer; request its reset
+        // instead of racing a memcpy from the main loop.
+        mqttAssemblyResetPending.store(true);
         clearPendingBridgeDiagnostics();
     }
 
@@ -1891,7 +1898,7 @@ public:
     }
 
     /**
-     * @brief Receives complete MQTT frames from the Homie MQTT callback.
+     * @brief Reassembles bounded MQTT commands from the Homie MQTT callback.
      *
      * @param topic null-terminated MQTT topic string provided by espMqttClient.
      * @param payload pointer to the current MQTT payload chunk.
@@ -1909,6 +1916,11 @@ public:
     {
         MqttCommandSource source = MqttCommandSource::Device;
 
+        if (mqttAssemblyResetPending.exchange(false) || index == 0U)
+        {
+            mqttCommandAssembler.reset();
+        }
+
         if (std::strcmp(topic, MqttTopicsBuilder::mqttInTopic.c_str()) == 0)
         {
             source = MqttCommandSource::Device;
@@ -1919,11 +1931,13 @@ public:
         }
         else
         {
+            mqttCommandAssembler.reset();
             return;
         }
 
         if (properties.retain)
         {
+            mqttCommandAssembler.reset();
             // Retained commands must not be replayed automatically when the bridge
             // reconnects, otherwise stale writes could be applied long after they
             // were intended.
@@ -1935,6 +1949,7 @@ public:
 
         if (total == 0U || len == 0U)
         {
+            mqttCommandAssembler.reset();
             mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Fragmented);
             DPL("Dropping MQTT command because zero-length or incomplete MQTT "
                 "payload delivery is not accepted by the bridge.");
@@ -1943,23 +1958,28 @@ public:
 
         if (total > constants::controllerSerial::MQTT_COMMAND_MESSAGE_MAX_SIZE)
         {
+            mqttCommandAssembler.reset();
             mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Oversize);
             DPL("Dropping MQTT command because the payload is larger than the fixed "
                 "bridge-side inbound command buffer.");
             return;
         }
 
-        // The bridge only accepts complete non-fragmented MQTT frames because it
-        // stores them in a fixed queue and parses them later in the main loop.
-        if (index != 0U || len != total)
+        // TCP may split even a small command. Keep the existing size limit and
+        // dispatch only a complete, contiguous payload from one topic family.
+        const auto assembled = mqttCommandAssembler.append(payload, len, index, total, source == MqttCommandSource::Service);
+        if (assembled == decltype(mqttCommandAssembler)::Result::Partial)
+        {
+            return;
+        }
+        if (assembled == decltype(mqttCommandAssembler)::Result::Invalid)
         {
             mqttCommandQueue.recordRejectedCommand(MqttRejectedCommandReason::Fragmented);
-            DPL("Dropping MQTT command because fragmented MQTT payload delivery is "
-                "not accepted by the fixed bridge command queue.");
+            DPL("Dropping MQTT command because its fragments are inconsistent.");
             return;
         }
 
-        if (!mqttCommandQueue.enqueue(source, reinterpret_cast<const char *>(payload), total))
+        if (!mqttCommandQueue.enqueue(source, mqttCommandAssembler.data(), total))
         {
             mqttCommandQueue.recordDroppedCommand(source);
             DPL("Dropping MQTT command because the inbound bridge queue is full. "

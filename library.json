@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/schema/library.json",
   "name": "lsh-bridge",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "Reusable ESP32 bridge runtime for the LSH stack, connecting serial controllers to MQTT and Homie.",
   "license": "Apache-2.0",
   "keywords": ["lsh", "esp32", "mqtt", "homie", "bridge", "serial", "msgpack"],
@@ -28,12 +28,12 @@
     {
       "owner": "etlcpp",
       "name": "Embedded Template Library",
-      "version": "20.48.1"
+      "version": "20.49.0"
     },
     {
       "owner": "labodj",
       "name": "homie-v5",
-      "version": "4.0.0"
+      "version": "4.0.1"
     },
     {
       "name": "espMqttClient",

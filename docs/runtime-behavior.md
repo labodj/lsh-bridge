@@ -108,13 +108,19 @@ Queue behavior:
 
 - queue capacity defaults to `8` complete MQTT frames
 - `CONFIG_MQTT_COMMAND_QUEUE_CAPACITY` controls that capacity
-- only complete non-fragmented frames are accepted
+- valid fragments are reassembled in one fixed-size buffer before enqueueing
 - retained commands are ignored
 - queue overflow drops the new command instead of blocking the callback
 - `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP` controls the idle-UART drain budget
 
 Queue overflow is reported as a bridge-local diagnostic. It is treated as a producer or
 backpressure problem, not as a reason to block MQTT callbacks.
+
+Fragment assembly uses the existing maximum command size, with no heap allocation.
+Fragments must be contiguous and keep the same total length and topic family. A new
+message replaces any incomplete assembly; disconnect requests its reset in the receive
+callback, so the main loop never modifies a buffer while it is being copied. No partial
+command reaches the decoder or UART. This applies to both JSON and MessagePack.
 
 ## Optional Serial MessagePack Framing
 
@@ -295,8 +301,8 @@ Fields:
   after reconnect could apply stale intent
 - `rejected_oversize_commands`: MQTT commands rejected before enqueue because they
   exceeded the fixed inbound command buffer
-- `rejected_fragmented_commands`: MQTT commands rejected because the bridge only accepts
-  complete non-fragmented inbound frames
+- `rejected_fragmented_commands`: MQTT commands rejected because fragment offsets,
+  lengths, total size or topic family are inconsistent; normal fragmentation is accepted
 - `rejected_malformed_commands`: MQTT commands whose delivery shape was acceptable but
   whose payload was not valid JSON/MessagePack for the active codec or did not contain a
   valid `p` command id

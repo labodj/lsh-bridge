@@ -91,8 +91,8 @@ Install from the PlatformIO Registry:
 ```ini
 lib_deps =
     ESP32Async/AsyncTCP@^3.5.0
-    labodj/homie-v5@4.0.0
-    labodj/lsh-bridge@^1.8.0
+    labodj/homie-v5@4.0.1
+    labodj/lsh-bridge@^1.8.1
 ```
 
 `AsyncTCP` is also a transitive dependency of the MQTT backend. Listing it in the
@@ -180,7 +180,8 @@ Runtime rules:
   synchronized
 - service-topic `PING` answers bridge reachability on the bridge-local topic
 - topology changes are saved to NVS and followed by one controlled reboot
-- retained, fragmented, oversize or malformed MQTT commands are rejected and diagnosed
+- retained, oversize, malformed or inconsistently fragmented MQTT commands are rejected
+  and diagnosed; valid fragments are reassembled before execution
 
 For the detailed runtime story, read
 [docs/runtime-behavior.md](https://github.com/labodj/lsh-bridge/blob/main/docs/runtime-behavior.md).
@@ -243,7 +244,7 @@ Validated baseline:
 - ESP32
 - Arduino framework
 - `pioarduino/platform-espressif32`
-- Homie convention v5 through `labodj/homie-v5` 4.0.0 and its maintained
+- Homie convention v5 through `labodj/homie-v5` 4.0.1 and its maintained
   `bertmelis/espMqttClient` backend
 
 Recommended PlatformIO platform:
