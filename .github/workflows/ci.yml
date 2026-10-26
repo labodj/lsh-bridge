@@ -55,6 +55,12 @@ jobs:
       - name: Run shared quality gate
         run: npm run check
 
+      - name: Test diagnostics with an isolated MQTT broker
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes mosquitto
+          npm run test:tools
+
   validate-generated-protocol:
     needs: quality
     runs-on: ubuntu-latest
@@ -219,7 +225,9 @@ jobs:
           tar -tzf "$package_path" | grep -F "docs/runtime-behavior.md"
           tar -tzf "$package_path" | grep -F "examples/basic-homie-bridge/platformio.ini"
           tar -tzf "$package_path" | grep -F "src/lsh_bridge.hpp"
-          ! tar -tzf "$package_path" | grep -E '(^|/)(\.pio|\.github|vendor|tools)(/|$)'
+          ! tar -tzf "$package_path" | grep -E '(^|/)(\.pio|\.github|vendor)(/|$)'
+          tar -tzf "$package_path" | grep -Fx "tools/mqtt_diagnostics.py"
+          ! tar -tzf "$package_path" | grep '^tools/' | grep -v '^tools/mqtt_diagnostics.py$'
 
           mkdir -p "$smoke_dir/include" "$smoke_dir/src"
           cp examples/basic-homie-bridge/include/lsh_etl_profile_override.h "$smoke_dir/include/"

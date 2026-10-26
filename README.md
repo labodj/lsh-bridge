@@ -265,6 +265,47 @@ those artifacts, validate them explicitly and use a full USB/serial flash when r
 This repository targets ESP32. ESP8266 support would need separate validation and
 support work.
 
+## MQTT Diagnostics
+
+The optional host-side tool observes Homie state, heap, uptime and MQTT queue counters.
+It is independent of the firmware build and requires Python 3.11+ and Paho MQTT 2.1;
+`uv run` supplies the Python dependency without changing system Python:
+
+```bash
+uv run tools/mqtt_diagnostics.py panel --broker-host localhost
+uv run tools/mqtt_diagnostics.py panel --config /path/to/generated/bridge-ota.json
+```
+
+No device or broker is selected implicitly. Passwords come from the generated OTA
+configuration or `--password-env VARIABLE`, not command-line literals. For a broker
+requiring authentication, supply `--username USER` as well. The tool never prints
+credentials. TLS settings in the OTA config are supported, but insecure TLS is rejected.
+
+The default observation is passive and lasts 30 seconds. Retained and live samples are
+labelled separately; a retained `ready` is not proof that a device is currently
+reachable. Increase `--duration` to cover the device's statistics interval when checking
+heap, drop counters or restarts. A missing/not-ready device, observed restart,
+increasing drop counter, subscription rejection or broker disconnection returns a
+nonzero exit code.
+
+For an explicitly selected test bridge running lsh-bridge, an optional bounded probe
+sends invalid boolean payloads to one Homie node:
+
+```bash
+uv run tools/mqtt_diagnostics.py panel --broker-host localhost --burst 20 --node 1
+```
+
+This verifies broker acknowledgments, not physical I/O or firmware consumption. It
+requires the target to advertise `ready` and a settable boolean property. No valid
+actuation, retained publication, state restoration, OTA or reboot is implemented. Even
+invalid traffic adds load: use a recoverable test bridge. Installation wrappers can add
+`--protected-device DEVICE`; bypassing that policy requires `--allow-protected`.
+
+The script is included in the PlatformIO library package under `tools/`. Its tests run
+with `npm run test:tools`; when Mosquitto is available they also start and stop a
+dedicated loopback-only broker on a temporary port. No test connects to an installation
+broker.
+
 ## Maintainer Notes
 
 Maintainer workflow notes live in

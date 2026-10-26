@@ -7,6 +7,7 @@ dependencies = []
 [dependency-groups]
 dev = [
   "clang-format>=18",
+  "paho-mqtt==2.1.0",
 ]
 
 [tool.uv]
