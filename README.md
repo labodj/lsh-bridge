@@ -92,7 +92,7 @@ Install from the PlatformIO Registry:
 lib_deps =
     ESP32Async/AsyncTCP@^3.5.0
     labodj/homie-v5@4.1.1
-    labodj/lsh-bridge@^1.8.1
+    labodj/lsh-bridge@^1.9.0
 ```
 
 `AsyncTCP` is also a transitive dependency of the MQTT backend. Listing it in the
