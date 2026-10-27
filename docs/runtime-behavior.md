@@ -215,7 +215,14 @@ or missing. `lsh-bridge` uses that behavior directly.
 Setup behavior:
 
 - brand-new or already-reset devices enter setup/AP mode through `Homie.setup()`
+- Homie serves its built-in offline configuration page; no filesystem or UI upload is
+  needed
+- setup tests Wi-Fi and MQTT before saving and preserves the logical device ID during
+  reconfiguration
 - Homie's physical reset trigger remains enabled by default
+- hold the default trigger for at least 5 seconds and release before 15 seconds to
+  reopen configuration without erasing the saved settings
+- hold for at least 15 seconds and release to factory-reset the Homie configuration
 - unattended ESP32 bridge boards can disable that trigger through
   `BridgeOptions::disableResetTrigger` or `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER=1`
 - `BridgeOptions::disableWifiSleep` disables ESP32 Wi-Fi modem sleep by default
@@ -223,8 +230,13 @@ Setup behavior:
 - when `HOMIE_RESET` is defined, the bridge calls `Homie.reset()` only if a valid stored
   Homie configuration exists
 
-This preserves the "force setup on next boot" workflow without creating a reset loop on
-devices without stored configuration.
+`HOMIE_RESET` and the MQTT `SYSTEM_RESET` command remain destructive factory resets;
+they must not be used merely to change Wi-Fi or MQTT credentials. After onboarding, the
+hotspot and web server close in normal mode. Losing Wi-Fi alone does not reopen setup.
+
+Homie owns copies of node and property metadata, so the bridge only needs a temporary
+decimal ID while constructing each actuator node. Registered nodes still live for the
+whole boot session; topology changes continue to use the controlled reboot workflow.
 
 ## Bridge-local Diagnostics on `bridge`
 

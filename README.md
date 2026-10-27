@@ -91,7 +91,7 @@ Install from the PlatformIO Registry:
 ```ini
 lib_deps =
     ESP32Async/AsyncTCP@^3.5.0
-    labodj/homie-v5@4.0.1
+    labodj/homie-v5@4.1.1
     labodj/lsh-bridge@^1.8.1
 ```
 
@@ -244,7 +244,7 @@ Validated baseline:
 - ESP32
 - Arduino framework
 - `pioarduino/platform-espressif32`
-- Homie convention v5 through `labodj/homie-v5` 4.0.1 and its maintained
+- Homie convention v5 through `labodj/homie-v5` 4.1.1 and its maintained
   `bertmelis/espMqttClient` backend
 
 Recommended PlatformIO platform:

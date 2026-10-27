@@ -101,7 +101,7 @@ Homie dependency compiles its own translation units, so it must see the same con
 selector as `lsh-bridge`. The bridge rejects missing or legacy values at compile time.
 Use the Homie dependency declared by `lsh-bridge`; older manual pins may miss the v5
 description and property-retention behavior expected by the bridge. The current source
-pins `labodj/homie-v5` to `4.0.1` in
+pins `labodj/homie-v5` to `4.1.1` in
 [`library.json`](https://github.com/labodj/lsh-bridge/blob/main/library.json).
 
 The embedding firmware should list `ESP32Async/AsyncTCP@^3.5.0` directly in `lib_deps`.
@@ -142,8 +142,8 @@ one fixed-size command buffer. `CONFIG_MQTT_MAX_COMMANDS_PER_LOOP` is a fairness
 setting, not a capacity setting.
 
 Leave Homie's physical reset trigger enabled for workbench bring-up. For unattended
-bridge boards where GPIO0/BOOT must not act as a factory-reset input, set
-`CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER=1` or configure
+bridge boards where GPIO0/BOOT must not open configuration or factory-reset the device,
+set `CONFIG_LSH_BRIDGE_DISABLE_RESET_TRIGGER=1` or configure
 `BridgeOptions::disableResetTrigger`.
 
 ## Implementation Storage
@@ -156,6 +156,11 @@ The bridge keeps its implementation opaque without heap allocation. Most project
 leave this unset. If an unusual capacity profile makes the hidden implementation larger
 than the default storage, compilation fails with a clear `static_assert` and the
 embedding project can raise this value.
+
+The default reservation remains 3072 bytes. Removing the bridge-owned Homie ID buffer
+reduces the space used inside that reservation; it does not automatically reduce the
+reserved static RAM. Homie's metadata copies use heap storage when nodes are
+constructed.
 
 The MQTT side also keeps two size classes:
 

@@ -25,7 +25,6 @@
 
 #include "constants/configs/homie_convention.hpp"
 #include <HomieNode.hpp>
-#include <etl/string.h>
 
 #include "constants/homie.hpp"
 #include "debug/debug.hpp"
@@ -34,24 +33,9 @@ class ControllerSerialLink;  //!< Forward declaration of the bridge serial trans
 class VirtualDevice;         //!< Forward declaration of the cached controller model.
 
 /**
- * @brief Stores the decimal Homie node ID derived from a numeric actuator ID.
- */
-struct HomieIdHolder
-{
-    etl::string<4> homieId;
-
-    explicit HomieIdHolder(std::uint8_t numericId)
-    {
-        char buffer[4];
-        itoa(numericId, buffer, 10);
-        homieId.assign(buffer);
-    }
-};
-
-/**
  * @brief Wraps one cached controller actuator as a Homie node.
  */
-class LSHNode : private HomieIdHolder, public HomieNode
+class LSHNode : public HomieNode
 {
 private:
     ControllerSerialLink &controllerSerialLink;  //!< Serial communication object.
@@ -63,14 +47,18 @@ private:
 
 public:
     /** @brief Construct one Homie node that mirrors one cached controller actuator. */
-    LSHNode(ControllerSerialLink &controllerSerialLink, VirtualDevice &virtualDevice, std::uint8_t index, std::uint8_t numericId) :
-        HomieIdHolder(numericId), HomieNode(homieId.c_str(), homieId.c_str(), constants::homie::HOMIE_ACTUATOR_TYPE),
-        controllerSerialLink(controllerSerialLink), virtualDevice(virtualDevice), actuatorIndex(index), actuatorId(numericId)
+    LSHNode(ControllerSerialLink &controllerSerialLink,
+            VirtualDevice &virtualDevice,
+            std::uint8_t index,
+            std::uint8_t numericId,
+            const char *homieId) :
+        HomieNode(homieId, homieId, constants::homie::HOMIE_ACTUATOR_TYPE), controllerSerialLink(controllerSerialLink),
+        virtualDevice(virtualDevice), actuatorIndex(index), actuatorId(numericId)
     {
-        DPL("Created new LSHNode | ID: ", this->homieId.c_str(), " | Index: ", this->actuatorIndex);
+        DPL("Created new LSHNode | ID: ", this->getId(), " | Index: ", this->actuatorIndex);
 
         this->advertise(constants::homie::HOMIE_PROPERTY_ADVERTISE)
-            .setName(this->homieId.c_str())
+            .setName(this->getId())
             .setDatatype(constants::homie::HOMIE_PROPERTY_DATATYPE_BOOLEAN)
             .setRetained(true)
             .settable(

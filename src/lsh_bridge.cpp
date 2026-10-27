@@ -546,7 +546,10 @@ public:
         for (std::uint8_t actuatorIndex = 0U; actuatorIndex < actuatorCount; ++actuatorIndex)
         {
             const auto actuatorId = virtualDevice.getActuatorId(actuatorIndex);
-            homieNodes.emplace_back(controllerSerialLink, virtualDevice, actuatorIndex, actuatorId);
+            char homieId[4];
+            utoa(actuatorId, homieId, 10);
+            // Homie owns the node and property metadata after construction.
+            homieNodes.emplace_back(controllerSerialLink, virtualDevice, actuatorIndex, actuatorId, homieId);
         }
     }
 
