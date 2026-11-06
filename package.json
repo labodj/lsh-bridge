@@ -16,6 +16,9 @@
   "overrides": {
     "markdownlint-cli2": {
       "smol-toml": "^1.8.0"
+    },
+    "markdownlint": {
+      "re2js": "^2.9.1"
     }
   },
   "devDependencies": {
