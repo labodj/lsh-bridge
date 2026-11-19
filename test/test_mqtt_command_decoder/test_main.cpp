@@ -2,6 +2,12 @@
 #include <cstdint>
 
 #include <unity.h>
+#include <ArduinoJson.h>
+#include <fstream>
+#include <string>
+#include "communication/msgpack_commands.hpp"
+#include "communication/msgpack_serial_framing.hpp"
+#include "utils/json_scalars.hpp"
 
 #include "mqtt_command_decoder.hpp"
 #include "mqtt_command_assembler.hpp"
@@ -34,6 +40,95 @@ void testValidSetSingleActuator()
                             static_cast<std::uint8_t>(command.shape));
     TEST_ASSERT_EQUAL_UINT8(2U, command.actuatorId);
     TEST_ASSERT_TRUE(command.state);
+}
+
+std::vector<std::uint8_t> fromHex(const std::string &hex)
+{
+    std::vector<std::uint8_t> bytes;
+    for (std::size_t i = 0; i < hex.size(); i += 2)
+        bytes.push_back(static_cast<std::uint8_t>(std::stoul(hex.substr(i, 2), nullptr, 16)));
+    return bytes;
+}
+
+void testSharedV3WireVectors()
+{
+    std::ifstream input("vendor/lsh-protocol/shared/lsh_protocol_golden_payloads.json");
+    DynamicJsonDocument document(32768);
+    TEST_ASSERT_FALSE(deserializeJson(document, input));
+    const auto vectors = document["wireVectors"].as<JsonObjectConst>();
+    TEST_ASSERT_GREATER_THAN(0, vectors.size());
+    for (const auto entry : vectors)
+    {
+        const auto payload = entry.value()["payload"].as<JsonObjectConst>();
+        const auto raw = fromHex(entry.value()["msgpack"].as<std::string>());
+        const auto expected = fromHex(entry.value()["uart"].as<std::string>());
+        HardwareSerial serial;
+        lsh::bridge::transport::MsgPackFrameWriter writer(serial);
+        TEST_ASSERT_TRUE(writer.beginFrame());
+        const auto command = static_cast<Command>(payload["p"].as<std::uint8_t>());
+        if (command == Command::NETWORK_CLICK_ACK || command == Command::FAILOVER_CLICK)
+            lsh::bridge::communication::writeClick(writer, command, payload["t"], payload["i"], payload["c"]);
+        else if (command == Command::SET_STATE)
+        {
+            const auto packed = payload["s"].as<JsonArrayConst>();
+            lsh::bridge::communication::writePackedState(writer, packed.size(),
+                                                         [&](std::uint8_t i) { return packed[i].as<std::uint8_t>(); });
+        }
+        else
+            serializeMsgPack(payload, writer);
+        TEST_ASSERT_TRUE(writer.endFrame());
+        TEST_ASSERT_EQUAL_UINT(expected.size(), serial.bytes.size());
+        TEST_ASSERT_EQUAL_MEMORY_MESSAGE(expected.data(), serial.bytes.data(), expected.size(), entry.key().c_str());
+        if (command == Command::DEVICE_DETAILS || command == Command::ACTUATORS_STATE)
+            continue;
+        DecodedMqttCommand decoded{};
+#ifdef CONFIG_MSG_PACK_MQTT
+        TEST_ASSERT_TRUE(decodeMqttCommandShallow(reinterpret_cast<const char *>(raw.data()), raw.size(), decoded));
+#else
+        std::string json;
+        serializeJson(payload, json);
+        TEST_ASSERT_TRUE(decodeMqttCommandShallow(json.data(), json.size(), decoded));
+#endif
+        TEST_ASSERT_EQUAL_UINT8(static_cast<std::uint8_t>(command), static_cast<std::uint8_t>(decoded.command));
+        if (command == Command::SET_SINGLE_ACTUATOR)
+        {
+            TEST_ASSERT_EQUAL_UINT8(payload["i"].as<std::uint8_t>(), decoded.actuatorId);
+            TEST_ASSERT_EQUAL(payload["s"].as<int>(), decoded.state);
+        }
+        if (command == Command::NETWORK_CLICK_ACK || command == Command::FAILOVER_CLICK)
+        {
+            TEST_ASSERT_EQUAL_UINT8(payload["i"].as<std::uint8_t>(), decoded.clickableId);
+            TEST_ASSERT_EQUAL_UINT8(payload["c"].as<std::uint8_t>(), decoded.correlationId);
+            TEST_ASSERT_EQUAL_UINT8(payload["t"].as<std::uint8_t>(), decoded.clickType);
+        }
+        if (command == Command::SET_STATE)
+        {
+            TEST_ASSERT_EQUAL_UINT(payload["s"].size(), decoded.packedStateLength);
+            for (std::uint8_t i = 0; i < decoded.packedStateLength; ++i)
+                TEST_ASSERT_EQUAL_UINT8(payload["s"][i].as<std::uint8_t>(), decoded.packedStateBytes[i]);
+        }
+    }
+}
+
+void testLshRelayStateRejectsBooleans()
+{
+    for (bool value : {false, true})
+    {
+        StaticJsonDocument<128> payload;
+        payload["p"] = 13;
+        payload["i"] = 1;
+        payload["s"] = value;
+        bool state = false;
+        TEST_ASSERT_FALSE(utils::json::tryGetBinaryState(payload["s"], state));
+        std::string encoded;
+#ifdef CONFIG_MSG_PACK_MQTT
+        serializeMsgPack(payload, encoded);
+#else
+        serializeJson(payload, encoded);
+#endif
+        DecodedMqttCommand command{};
+        TEST_ASSERT_FALSE(decodeMqttCommandShallow(encoded.data(), encoded.size(), command));
+    }
 }
 
 void testRejectsDuplicateFields()
@@ -108,6 +203,8 @@ int main(int, char **)
 {
     UNITY_BEGIN();
     RUN_TEST(testValidSetSingleActuator);
+    RUN_TEST(testSharedV3WireVectors);
+    RUN_TEST(testLshRelayStateRejectsBooleans);
     RUN_TEST(testRejectsDuplicateFields);
     RUN_TEST(testCommandAssemblyEverySplit);
     RUN_TEST(testCommandAssemblyRejectsInvalidFragments);

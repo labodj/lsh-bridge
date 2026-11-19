@@ -117,20 +117,6 @@ public:
 
     [[nodiscard]] auto readBinaryState(bool &outState) noexcept -> bool
     {
-        skipWhitespace();
-        if (remainingStartsWith("true"))
-        {
-            current += 4;
-            outState = true;
-            return true;
-        }
-        if (remainingStartsWith("false"))
-        {
-            current += 5;
-            outState = false;
-            return true;
-        }
-
         std::uint8_t rawState = 0U;
         if (!readUint8(rawState) || rawState > 1U)
         {
@@ -189,21 +175,6 @@ public:
 private:
     const char *current = nullptr;
     const char *end = nullptr;
-
-    [[nodiscard]] auto remainingStartsWith(const char *literal) const noexcept -> bool
-    {
-        const char *cursor = current;
-        while (*literal != '\0')
-        {
-            if (cursor >= end || *cursor != *literal)
-            {
-                return false;
-            }
-            ++cursor;
-            ++literal;
-        }
-        return true;
-    }
 };
 
 [[nodiscard]] auto decodeJsonMqttCommand(const char *payload, std::size_t payloadLength, DecodedMqttCommand &outCommand) -> bool
@@ -444,18 +415,6 @@ public:
 
     [[nodiscard]] auto readBinaryState(bool &outState) noexcept -> bool
     {
-        std::uint8_t marker = 0U;
-        if (!peekByte(marker))
-        {
-            return false;
-        }
-        if (marker == 0xC2U || marker == 0xC3U)
-        {
-            (void)readByte(marker);
-            outState = marker == 0xC3U;
-            return true;
-        }
-
         std::uint8_t rawState = 0U;
         if (!readUint8(rawState) || rawState > 1U)
         {

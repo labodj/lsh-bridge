@@ -155,7 +155,10 @@ homie/5/<device>/$description
 ```
 
 Each cached controller actuator becomes one Homie node. Its canonical property is
-`state`, which is boolean, retained and settable.
+`state`, which is boolean, retained and settable. On the LSH device command topic
+`LSH/<device>/IN`, `SET_SINGLE_ACTUATOR` uses integer `0` or `1` for `s` in both JSON
+and MsgPack. If an integration publishes `true` or `false` on that topic, send integers
+instead. Homie clients keep using the boolean property.
 
 Retention is declared on the advertised Homie property metadata. State publishes rely on
 that property metadata instead of overriding the retain flag per message.

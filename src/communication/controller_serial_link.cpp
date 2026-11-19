@@ -31,6 +31,7 @@
 #include <etl/bitset.h>
 
 #include "communication/checked_writer.hpp"
+#include "communication/msgpack_commands.hpp"
 #include "constants/controller_serial.hpp"
 #include "constants/communication_protocol.hpp"
 #include "constants/configs/ping.hpp"
@@ -203,38 +204,6 @@ template <typename Writer> void writeUint8Decimal(Writer &writer, std::uint8_t v
 
     (void)writer.write(reinterpret_cast<const std::uint8_t *>(digits), length);
 }
-
-#ifdef CONFIG_MSG_PACK_ARDUINO
-/**
- * @brief Write one uint8 using the shortest canonical MsgPack unsigned form.
- */
-template <typename Writer> void writeMsgPackUint8(Writer &writer, std::uint8_t value)
-{
-    if (value <= 0x7FU)
-    {
-        (void)writer.write(value);
-        return;
-    }
-
-    const std::uint8_t bytes[] = {0xCCU, value};
-    (void)writer.write(bytes, sizeof(bytes));
-}
-
-/**
- * @brief Write a MsgPack array header for the packed state byte array.
- */
-template <typename Writer> void writeMsgPackArrayPrefix(Writer &writer, std::uint8_t elementCount)
-{
-    if (elementCount <= 15U)
-    {
-        (void)writer.write(static_cast<std::uint8_t>(0x90U | elementCount));
-        return;
-    }
-
-    const std::uint8_t bytes[] = {0xDCU, 0x00U, elementCount};
-    (void)writer.write(bytes, sizeof(bytes));
-}
-#endif
 
 /**
  * @brief Decode one packed desired-state payload into the bridge-side desired shadow form.
@@ -747,17 +716,8 @@ auto ControllerSerialLink::sendSetStateCommand(const DesiredActuatorStateBitset 
     }
 
     lsh::bridge::communication::CheckedWriter<Print> checkedWriter(framedWriter);
-    (void)checkedWriter.write(static_cast<std::uint8_t>(0x82U));  // fixmap, 2 key/value pairs
-    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
-    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_PAYLOAD[0]));
-    writeMsgPackUint8(checkedWriter, static_cast<std::uint8_t>(Command::SET_STATE));
-    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
-    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_STATE[0]));
-    writeMsgPackArrayPrefix(checkedWriter, byteCount);
-    for (std::uint8_t byteIndex = 0U; byteIndex < byteCount; ++byteIndex)
-    {
-        writeMsgPackUint8(checkedWriter, packedStateByteFromBits(desiredSnapshot, byteIndex, totalActuators));
-    }
+    lsh::bridge::communication::writePackedState(checkedWriter, byteCount, [&](std::uint8_t index)
+                                                 { return packedStateByteFromBits(desiredSnapshot, index, totalActuators); });
 
     const bool frameEnded = framedWriter.endFrame();
     if (checkedWriter.failed() || !frameEnded)
@@ -805,19 +765,7 @@ auto ControllerSerialLink::sendClickCommand(lsh::bridge::protocol::Command comma
     }
 
     lsh::bridge::communication::CheckedWriter<Print> checkedWriter(framedWriter);
-    (void)checkedWriter.write(static_cast<std::uint8_t>(0x84U));  // fixmap, 4 key/value pairs
-    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
-    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_PAYLOAD[0]));
-    writeMsgPackUint8(checkedWriter, static_cast<std::uint8_t>(command));
-    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
-    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_TYPE[0]));
-    writeMsgPackUint8(checkedWriter, clickType);
-    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
-    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_ID[0]));
-    writeMsgPackUint8(checkedWriter, clickableId);
-    (void)checkedWriter.write(static_cast<std::uint8_t>(0xA1U));
-    (void)checkedWriter.write(static_cast<std::uint8_t>(KEY_CORRELATION_ID[0]));
-    writeMsgPackUint8(checkedWriter, correlationId);
+    lsh::bridge::communication::writeClick(checkedWriter, command, clickType, clickableId, correlationId);
 
     const bool frameEnded = framedWriter.endFrame();
     if (checkedWriter.failed() || !frameEnded)
