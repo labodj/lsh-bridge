@@ -57,7 +57,9 @@ For a practical reading path:
 - `shared/lsh_protocol.json`
   The compact protocol specification. Edit this when the wire contract changes.
 - `shared/lsh_protocol_golden_payloads.json`
-  Human-readable golden examples used by tests, generated docs, and consumers.
+  Human-readable examples plus `wireVectors` with logical payload, raw MQTT MsgPack
+  and escaped UART bytes (hex). The native core receiver, native bridge writers and
+  command decoders, and coordinator codec all replay the same vectors.
 - `shared/lsh_protocol.md`
   Generated reference documentation. Do not edit it by hand.
 - `shared/lsh_protocol.schema.json`
@@ -213,9 +215,17 @@ Check that generated files are up to date:
 python3 tools/generate_lsh_protocol.py --check
 ```
 
+To replay the examples against the schema and an independent MsgPack implementation,
+install `jsonschema` and `msgpack` in your test environment and run
+`python -m unittest discover -s tests`.
+
 CI also checks generated protocol files in the public consumer repositories
 (`lsh-core`, `lsh-bridge`, and `labo-smart-home-coordinator`) and verifies their
-hashes against `shared/lsh_protocol_manifest.json`.
+hashes against `shared/lsh_protocol_manifest.json`. During an upstream release,
+each consumer must match one complete canonical revision (current or immediately
+previous), including its vendored inputs and generated output bytes. After updating
+the three subtrees, dispatch CI with `require_current` enabled or run
+`python tools/check_consumer_drift.py` in a workspace containing all three repos.
 
 Generate outputs for the public consumers:
 

@@ -9,6 +9,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      require_current:
+        description: "Verify every consumer has adopted this revision"
+        type: boolean
+        default: true
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -24,15 +29,20 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Validate generated shared documentation
         run: python3 tools/generate_lsh_protocol.py --check
+
+      - name: Check canonical examples, schema and serial frames
+        run: |
+          python -m pip install "msgpack>=1,<2" "jsonschema>=4,<5"
+          python -m unittest discover -s tests
 
   lint-markdown:
     runs-on: ubuntu-latest
@@ -40,15 +50,15 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "lts/*"
 
       - name: Lint Markdown
-        run: npx --yes markdownlint-cli2@0.22.1
+        run: npx --yes markdownlint-cli2@0.24.0
 
   smoke-test-all-target-generators:
     needs: validate-generated-shared-doc
@@ -57,10 +67,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -83,76 +93,43 @@ jobs:
 
     steps:
       - name: Checkout protocol
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: lsh-protocol
+          fetch-depth: 0
 
       - name: Checkout lsh-core
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: labodj/lsh-core
           path: lsh-core
           submodules: "recursive"
 
       - name: Checkout lsh-bridge
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: labodj/lsh-bridge
           path: lsh-bridge
           submodules: "recursive"
 
       - name: Checkout coordinator
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: labodj/labo-smart-home-coordinator
           path: labo-smart-home-coordinator
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - name: Validate generated consumer protocol artifacts
+      - name: Verify consumer input and output hashes
+        env:
+          REQUIRE_CURRENT: ${{ inputs.require_current }}
         run: |
-          python3 lsh-protocol/tools/generate_lsh_protocol.py \
-            --target core \
-            --target bridge \
-            --target coordinator \
-            --core-root lsh-core \
-            --bridge-root lsh-bridge \
-            --coordinator-root labo-smart-home-coordinator \
-            --check
-
-      - name: Validate manifest consumer hashes
-        run: |
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import pathlib
-
-          root = pathlib.Path(".")
-          manifest = json.loads(
-              (root / "lsh-protocol/shared/lsh_protocol_manifest.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-
-          errors = []
-          for artifact in manifest["consumerArtifacts"]:
-              path = root / artifact["path"]
-              if not path.exists():
-                  errors.append(f"missing consumer artifact: {artifact['path']}")
-                  continue
-              digest = hashlib.sha256(path.read_bytes()).hexdigest()
-              if digest != artifact["sha256"]:
-                  errors.append(
-                      f"hash mismatch for {artifact['path']}: "
-                      f"expected {artifact['sha256']}, got {digest}"
-                  )
-
-          if errors:
-              raise SystemExit("\n".join(errors))
-          PY
+          args=()
+          if [[ "$REQUIRE_CURRENT" != "true" ]]; then args+=(--allow-previous); fi
+          python lsh-protocol/tools/check_consumer_drift.py "${args[@]}"
 
   release:
     needs:
@@ -168,7 +145,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

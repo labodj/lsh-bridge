@@ -938,7 +938,7 @@ def render_json_schema(spec: ProtocolSpec) -> str:
 
     positive_uint8 = _uint8_schema(positive=True)
     uint8 = _uint8_schema()
-    uint8_array = {"type": "array", "items": uint8}
+    uint8_array = {"type": "array", "items": uint8, "maxItems": 32}
     positive_unique_uint8_array = {
         "type": "array",
         "items": positive_uint8,
