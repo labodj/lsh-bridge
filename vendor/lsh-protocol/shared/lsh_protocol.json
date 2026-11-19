@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "LSH Protocol",
-    "specRevision": 2026050101,
+    "specRevision": 2026111901,
     "wireProtocolMajor": 3,
     "notes": "Metadata-only revision. Never transmitted on wire.",
     "documentation": {
@@ -17,19 +17,22 @@
       "compatibility": [
         "`DEVICE_DETAILS.v` is the only on-wire compatibility field and is transmitted only during the handshake.",
         "Consumers must reject `DEVICE_DETAILS` when `v` does not match their locally compiled `WIRE_PROTOCOL_MAJOR`.",
-        "If `DEVICE_DETAILS.v` matches, the handshake may continue normally.",
+        "A live incompatible announcement invalidates the previous session. Resume operations after fresh compatible details and a valid state snapshot.",
+        "Before accepting topology, a consumer can request details and state. It must not infer actuator IDs or counts from the packed state length.",
         "`specRevision` is documentation and generated-code metadata only. It is never transmitted on wire and must not be used for runtime compatibility decisions."
       ],
       "transport": [
         "The logical LSH payload format is transport-agnostic.",
         "JSON over serial is newline-delimited.",
         "MsgPack over serial uses `END + escaped(payload) + END`, with `END = 0xC0`, `ESC = 0xDB`, `ESC_END = 0xDC` and `ESC_ESC = 0xDD`.",
+        "For canonical MsgPack, each positive fixint from 0 through 127 occupies one byte and uint8 values from 128 through 255 occupy two. Budget 15 deframed bytes for ACK/FAILOVER_CLICK with two high IDs. For SET_STATE with B packed bytes, a safe bound is 6 + arrayHeader(B) + 2*B, where the array header is one byte for B < 16 or three bytes for B = 16..32. Serial delimiters and escapes are additional wire bytes.",
         "MQTT carries raw JSON strings or raw MsgPack payload bytes.",
         "`PING` is hop-local by default: it probes reachability of the immediate peer on the current transport unless a higher-level profile defines a stronger meaning.",
         "`BOOT` is role-local by default: it tells the receiving peer to discard runtime assumptions and re-synchronize. Whether it is forwarded across multiple hops is profile-specific, not part of the base wire contract."
       ],
       "constraints": [
         "`i`, `c`, actuator IDs and button IDs are positive 8-bit values. `0` is reserved as a sentinel for missing or invalid fields and must not be used on the wire.",
+        "`ACTUATORS_STATE.s` and `SET_STATE.s` contain exactly ceil(N/8) bytes for the N actuators in the latest accepted `DEVICE_DETAILS.a` (0 to 32 bytes). Bit 0 of the first byte is the first listed actuator. Unused high bits in the last byte must be zero.",
         "`SET_SINGLE_ACTUATOR.s` accepts only `0` or `1` on the wire.",
         "Bridge builds may impose a tighter maximum on `n` via `CONFIG_MAX_NAME_LENGTH` (default `4`). Device names must fit the compiled bridge limit."
       ]

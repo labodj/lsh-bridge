@@ -154,6 +154,25 @@ projection of the latest accepted authoritative state. When a profile lets an
 adapter answer from cache, the profile should explain when that cache is valid
 and when it must be invalidated.
 
+For example, these three payloads belong to a single v3 session:
+
+```json
+{"p":1,"v":3,"n":"panel","a":[1,5],"b":[7]}
+```
+
+```json
+{"p":2,"s":[2]}
+```
+
+```json
+{"p":13,"i":1,"s":1}
+```
+
+The snapshot says relay 5 is on and relay 1 is off. The final command requests
+relay 1 on. If applied, the next snapshot is `{"p":2,"s":[3]}`. The individual
+examples in the generated command table are independent. Use this sequence when
+testing a complete session. With no actuators, the snapshot is `s=[]`.
+
 ### `REQUEST_DETAILS` and `REQUEST_STATE`
 
 These commands ask the immediate peer for fresh authoritative snapshots.
@@ -191,6 +210,20 @@ sender and re-synchronize before trusting cached topology or cached state again.
 The base protocol does not require `BOOT` to be forwarded across every hop. A
 profile may forward it, translate it, or use a local service-topic `BOOT`, but
 that behavior must be explicit.
+
+### Duplicate click requests
+
+In the public MQTT profile, a pending request is identified by device, button, click
+type and correlation ID. Repeat the ACK for a duplicate pending request and keep the
+original deadline and targets. Consume the first timely CONFIRM once. A different
+correlation on the same slot replaces the previous attempt. Correlations run from
+1 through 255 and wrap. After expiry or a session change, a late CONFIRM cannot
+complete the old transaction.
+
+After a live incompatible announcement, discard affected pending clicks. Wait for fresh
+live compatible details followed by valid live state. A retained replay cannot complete
+this recovery. In normal startup, compatible retained snapshots can still populate the
+registry. A snapshot received before topology triggers a request for both in order.
 
 ## Profiles
 

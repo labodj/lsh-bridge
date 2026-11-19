@@ -3,13 +3,13 @@
     {
       "consumer": "lsh-core",
       "path": "lsh-core/src/communication/constants/protocol.hpp",
-      "sha256": "8adbdb1a848ea8e1ba50af00145a70c2eef5eace1271e9a46ac971dc725b6549",
+      "sha256": "85948a8d216f40c1fc8f23b6c76cf39d06d783a2c923b69ed958b2c142d6eee8",
       "target": "core"
     },
     {
       "consumer": "lsh-core",
       "path": "lsh-core/src/communication/constants/transport.hpp",
-      "sha256": "4d66483f7fe3d52c1ac870cd570c5d973a77de8da43280754bf2401b63203b20",
+      "sha256": "a81a0f9985ebaa09338008a0e3b6c123a8cb7e68a300111956ba4b1ad015e2c6",
       "target": "core"
     },
     {
@@ -21,13 +21,13 @@
     {
       "consumer": "lsh-bridge",
       "path": "lsh-bridge/src/constants/communication_protocol.hpp",
-      "sha256": "4a0be50122385b67c0e1fa4296cbfcff43aacc02f1f831a4e0cc52b7fe5bcf38",
+      "sha256": "2c623460fc92ccfad168bf1c93b2962e5ce40a81c260f2547adadd1e3a4b08d6",
       "target": "bridge"
     },
     {
       "consumer": "lsh-bridge",
       "path": "lsh-bridge/src/constants/transport.hpp",
-      "sha256": "930b355aee5ff8f63964eac7c65b6b912af0a834cfe31d2a5e6ed6dd8446e599",
+      "sha256": "8e533cd00ab14079fa365fd5f4aa642f667e5419ce14099e6375d21b456e5530",
       "target": "bridge"
     },
     {
@@ -39,31 +39,31 @@
     {
       "consumer": "labo-smart-home-coordinator",
       "path": "labo-smart-home-coordinator/src/generated/protocol.ts",
-      "sha256": "4a2cdf72eb76a21be5b160a9c00c939c6ebf8c88a9c40a28cb49b89beed4075e",
+      "sha256": "bdaa73e994d429e0e31461d3782f15f1f77e726fadd82ba5183fb9b1e65bd184",
       "target": "coordinator"
     }
   ],
   "generatedArtifacts": [
     {
       "path": "shared/lsh_protocol.md",
-      "sha256": "d97bd4d4427fe4a8d20bfff1976f4f4611cd1a222f4bd25241567a8556e10aee"
+      "sha256": "a62cdf467b648781183c34fb64f369d651f9dbbcfe4a2569afaf9d35666edcff"
     },
     {
       "path": "shared/lsh_protocol.schema.json",
-      "sha256": "e670e34e5d189685b560d82dd0ab76c0722ee49b1d31de5a811735a2990248e0"
+      "sha256": "8c36f9174ef819b29da2abaeb12ee07b202dba594659048f0bd544cd1c6caf94"
     }
   ],
   "inputs": {
     "goldenPayloads": {
       "path": "shared/lsh_protocol_golden_payloads.json",
-      "sha256": "fb92784b3982aacfe3a2858eb1d7cba1f03991ceee7e6ccde37643711d8ffaa5"
+      "sha256": "86878782f46f3bee307383cc8776566f3f573f644b289f1e26bc53a4060e9325"
     },
     "spec": {
       "path": "shared/lsh_protocol.json",
-      "sha256": "933bba3c622026e24c1efc7b056ca07cf71d0eef5a376cc14bad3264a60d9b13"
+      "sha256": "315b1975eb4c4b367f340eb0f154023aaefe1223006c3f4fa766733b59c04a70"
     }
   },
   "schema": "lsh-protocol-manifest/v1",
-  "specRevision": 2026050101,
+  "specRevision": 2026111901,
   "wireProtocolMajor": 3
 }

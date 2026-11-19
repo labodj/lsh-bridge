@@ -4,12 +4,20 @@
       "p": 1,
       "v": 3,
       "n": "c1",
-      "a": [1, 5],
-      "b": [7]
+      "a": [
+        1,
+        5
+      ],
+      "b": [
+        7
+      ]
     },
     "actuatorsState": {
       "p": 2,
-      "s": [90, 3]
+      "s": [
+        90,
+        3
+      ]
     },
     "networkClickRequest": {
       "p": 3,
@@ -31,7 +39,10 @@
     },
     "setState": {
       "p": 12,
-      "s": [90, 3]
+      "s": [
+        90,
+        3
+      ]
     },
     "setSingleActuator": {
       "p": 13,
@@ -64,6 +75,143 @@
     },
     "systemReset": {
       "p": 255
+    }
+  },
+  "wireVectors": {
+    "ping": {
+      "payload": {
+        "p": 5
+      },
+      "msgpack": "81a17005",
+      "uart": "c081a17005c0"
+    },
+    "sparseDetails": {
+      "payload": {
+        "p": 1,
+        "v": 3,
+        "n": "c1",
+        "a": [
+          1,
+          128
+        ],
+        "b": [
+          219
+        ]
+      },
+      "msgpack": "85a17001a17603a16ea26331a1619201cc80a16291ccdb",
+      "uart": "c085a17001a17603a16ea26331a1619201cc80a16291ccdbddc0"
+    },
+    "sparseState": {
+      "payload": {
+        "p": 2,
+        "s": [
+          2
+        ]
+      },
+      "msgpack": "82a17002a1739102",
+      "uart": "c082a17002a1739102c0"
+    },
+    "relayOff": {
+      "payload": {
+        "p": 13,
+        "i": 128,
+        "s": 0
+      },
+      "msgpack": "83a1700da169cc80a17300",
+      "uart": "c083a1700da169cc80a17300c0"
+    },
+    "relayOn": {
+      "payload": {
+        "p": 13,
+        "i": 255,
+        "s": 1
+      },
+      "msgpack": "83a1700da169ccffa17301",
+      "uart": "c083a1700da169ccffa17301c0"
+    },
+    "ack127": {
+      "payload": {
+        "p": 14,
+        "t": 1,
+        "i": 7,
+        "c": 127
+      },
+      "msgpack": "84a1700ea17401a16907a1637f",
+      "uart": "c084a1700ea17401a16907a1637fc0"
+    },
+    "ack128": {
+      "payload": {
+        "p": 14,
+        "t": 1,
+        "i": 7,
+        "c": 128
+      },
+      "msgpack": "84a1700ea17401a16907a163cc80",
+      "uart": "c084a1700ea17401a16907a163cc80c0"
+    },
+    "ackEscaped": {
+      "payload": {
+        "p": 14,
+        "t": 1,
+        "i": 192,
+        "c": 219
+      },
+      "msgpack": "84a1700ea17401a169ccc0a163ccdb",
+      "uart": "c084a1700ea17401a169ccdbdca163ccdbddc0"
+    },
+    "failover255": {
+      "payload": {
+        "p": 16,
+        "t": 2,
+        "i": 255,
+        "c": 255
+      },
+      "msgpack": "84a17010a17402a169ccffa163ccff",
+      "uart": "c084a17010a17402a169ccffa163ccffc0"
+    },
+    "emptyState": {
+      "payload": {
+        "p": 12,
+        "s": []
+      },
+      "msgpack": "82a1700ca17390",
+      "uart": "c082a1700ca17390c0"
+    },
+    "packedEscaped": {
+      "payload": {
+        "p": 12,
+        "s": [
+          192,
+          219
+        ]
+      },
+      "msgpack": "82a1700ca17392ccc0ccdb",
+      "uart": "c082a1700ca17392ccdbdcccdbddc0"
+    },
+    "array16": {
+      "payload": {
+        "p": 12,
+        "s": [
+          255,
+          255,
+          255,
+          255,
+          255,
+          255,
+          255,
+          255,
+          255,
+          255,
+          255,
+          255,
+          255,
+          255,
+          255,
+          255
+        ]
+      },
+      "msgpack": "82a1700ca173dc0010ccffccffccffccffccffccffccffccffccffccffccffccffccffccffccffccff",
+      "uart": "c082a1700ca173dc0010ccffccffccffccffccffccffccffccffccffccffccffccffccffccffccffccffc0"
     }
   }
 }
